@@ -1,9 +1,7 @@
-// app/reset-password/page.tsx
-"use client";
-
-import React from "react";
+// src/app/(auth)/reset-password/page.tsx
+import React, { Suspense } from "react";
 import Link from "next/link";
-import ResetPasswordForm from "../../../components/forms/ResetPasswordForm";
+import ResetPasswordClient from "../../../components/auth/ResetPasswordClient";
 
 export default function ResetPasswordPage() {
   return (
@@ -16,7 +14,6 @@ export default function ResetPasswordPage() {
       <main className="flex-1 flex w-full items-center justify-center px-4 py-12">
         <div className="w-full max-w-8xl">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-center">
-            {/* Left promo */}
             <aside className="hidden md:flex flex-col justify-center px-10">
               <div className="mb-6">
                 <h2 className="text-3xl font-extrabold text-slate-900">
@@ -35,7 +32,6 @@ export default function ResetPasswordPage() {
               </div>
             </aside>
 
-            {/* Right: form card */}
             <section className="mx-auto w-full max-w-md">
               <div className="bg-white/60 backdrop-blur-md rounded-2xl p-6 md:p-8 ring-1 ring-slate-200 shadow-xl">
                 <div className="flex items-start justify-between mb-6">
@@ -66,7 +62,9 @@ export default function ResetPasswordPage() {
                 </div>
 
                 <div className="mb-4">
-                  <ResetPasswordForm />
+                  <Suspense fallback={<div>Loading...</div>}>
+                    <ResetPasswordClient />
+                  </Suspense>
                 </div>
 
                 <div className="mt-4 text-center text-sm text-slate-500">
