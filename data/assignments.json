@@ -1,0 +1,80 @@
+[
+  {
+    "id": "assign_80misaw",
+    "orgId": "org_mgowuc89",
+    "courseId": "course_i84ohbm",
+    "createdAt": "2025-10-16T13:01:53.095Z",
+    "assignedCount": 0,
+    "employeeEmails": [
+      "jatinpatel2022@vitbhopal.ac.in"
+    ]
+  },
+  {
+    "id": "assign_iap3r9y",
+    "orgId": "org_mgowuc89",
+    "courseId": "course_i84ohbm",
+    "createdAt": "2025-10-16T13:01:21.110Z",
+    "assignedCount": 0,
+    "employeeEmails": [
+      "jatinpatel2022@vitbhopal.ac.in"
+    ]
+  },
+  {
+    "id": "assign_aqabaei",
+    "orgId": "org_mgowuc89",
+    "courseId": "course_i84ohbm",
+    "createdAt": "2025-10-16T12:45:06.020Z",
+    "assignedCount": 0,
+    "employeeEmails": [
+      "jatinpatel2022@vitbhopal.ac.in",
+      "krishnamdigi@gmail.com"
+    ]
+  },
+  {
+    "id": "assign_nxxwzac",
+    "orgId": "org_mgowuc89",
+    "courseId": "course_i84ohbm",
+    "createdAt": "2025-10-16T12:42:54.545Z",
+    "assignedCount": 0,
+    "employeeEmails": [
+      "jatinpatel2022@vitbhopal.ac.in",
+      "krishnamdigi@gmail.com"
+    ]
+  },
+  {
+    "id": "assign_3ejh348",
+    "orgId": "org_mgowuc89",
+    "courseId": "course_i84ohbm",
+    "createdAt": "2025-10-16T12:41:33.341Z",
+    "assignedCount": 0,
+    "employeeEmails": [
+      "jatinpatel2022@vitbhopal.ac.in"
+    ]
+  },
+  {
+    "id": "assign_ytb7htk",
+    "orgId": "org_mgowuc89",
+    "courseId": "course_i84ohbm",
+    "createdAt": "2025-10-16T12:32:00.772Z",
+    "assignedCount": 0,
+    "employeeEmails": [
+      "jatinpatel2022@vitbhopal.ac.in"
+    ]
+  },
+  {
+    "id": "assign_w05o31p",
+    "orgId": "org_mgowuc89",
+    "courseId": "course_i84ohbm",
+    "employeeIds": [
+      "cmgtb57rb0001rk0aix491sjb",
+      "krishnamdigi@gmail.com",
+      "cmgtb56wh0000rk0apajsnz77",
+      "jatinpatel2022@vitbhopal.ac.in"
+    ],
+    "employeeEmails": [
+      "krishnamdigi@gmail.com",
+      "jatinpatel2022@vitbhopal.ac.in"
+    ],
+    "createdAt": "2025-10-16T12:26:13.589Z"
+  }
+]

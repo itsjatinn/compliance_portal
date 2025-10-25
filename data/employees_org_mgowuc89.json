@@ -1,0 +1,22 @@
+[
+  {
+    "id": "cmgtb56wh0000rk0apajsnz77",
+    "name": "jatin",
+    "email": "jatinpatel2022@vitbhopal.ac.in",
+    "role": "employee",
+    "createdAt": "2025-10-13T09:08:42.742Z",
+    "passwordHash": "$2b$10$WOG0NrF0X2DCmrXRMqy/euqs1.m3yk/LaSGt.i1N2fWZpBaTI0Wm.",
+    "updatedAt": "2025-10-16T12:27:53.590Z",
+    "mustChangePassword": true
+  },
+  {
+    "id": "cmgtb57rb0001rk0aix491sjb",
+    "name": "Jatin",
+    "email": "krishnamdigi@gmail.com",
+    "role": "employee",
+    "createdAt": "2025-10-15T05:07:11.740Z",
+    "passwordHash": "$2b$10$Xa6G.BrzUX26IIo/.8D4xOXtk2T52mDQXpoyd.OZGUFIuJ60O5l1G",
+    "updatedAt": "2025-10-16T12:27:53.585Z",
+    "mustChangePassword": true
+  }
+]

@@ -1,0 +1,44 @@
+[
+  {
+    "id": "course_i84ohbm",
+    "title": "Demo course",
+    "description": "",
+    "duration": "",
+    "thumbnail": null,
+    "introVideo": "/uploads/5lalbw_4435751-uhd_3840_2160_25fps.mp4",
+    "lessons": [
+      {
+        "id": "l_dsdecijg",
+        "title": "Demo lesson",
+        "duration": "",
+        "summary": "",
+        "content": "",
+        "resourceFileName": "crosue_4435751-uhd_3840_2160_25fps.mp4",
+        "quizFileName": null,
+        "resourceUrl": "/uploads/crosue_4435751-uhd_3840_2160_25fps.mp4"
+      }
+    ],
+    "uploadedAt": "2025-10-16T09:31:52.558Z"
+  },
+  {
+    "id": "course_dcz9f70",
+    "title": "Posh trial",
+    "description": "",
+    "duration": "",
+    "thumbnail": null,
+    "introVideo": "/uploads/quon2p_The_Sexual_Harassment_of_Women_at_Workplace_Prevention__Prohibition_and_Redressal_Act__2013.mp4",
+    "lessons": [
+      {
+        "id": "l_n2ijan9k",
+        "title": "Lesson 1 ",
+        "duration": "",
+        "summary": "",
+        "content": "",
+        "resourceFileName": "681chz_4435751-uhd_3840_2160_25fps.mp4",
+        "quizFileName": null,
+        "resourceUrl": "/uploads/681chz_4435751-uhd_3840_2160_25fps.mp4"
+      }
+    ],
+    "uploadedAt": "2025-10-13T09:10:23.577Z"
+  }
+]

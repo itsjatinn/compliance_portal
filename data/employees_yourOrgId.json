@@ -1,0 +1,11 @@
+[
+  {
+    "id": "cmgt9eudp0001rkiqynfa4s7o",
+    "email": "alice@example.com",
+    "name": null,
+    "passwordHash": "$2b$10$s/Zn4b9LOT7iQubnFaaow.l3GVeczYXutzh1./kKlLAicUWz6811u",
+    "createdAt": "2025-10-16T10:10:55.700Z",
+    "updatedAt": "2025-10-16T10:10:55.770Z",
+    "mustChangePassword": true
+  }
+]

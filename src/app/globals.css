@@ -1,0 +1,137 @@
+@import "tailwindcss";
+/* globals.css — Tailwind v4 compatible */
+
+/* Tell PostCSS we will reference theme/base/components/utilities layers */
+@layer theme, base, components, utilities;
+
+/* Import Tailwind v4 internals into the correct layers */
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/preflight.css" layer(base);
+@import "tailwindcss/utilities.css" layer(utilities);
+
+/* ========== Brand variables (map to tailwind tokens) ========== */
+@layer base {
+  :root {
+    /* primary indigo */
+    --color-primary-50:  #eef2ff;
+    --color-primary-100: #e0e7ff;
+    --color-primary-200: #c7d2fe;
+    --color-primary-300: #a5b4fc;
+    --color-primary-400: #818cf8;
+    --color-primary-500: #6366f1;
+    --color-primary-600: #4f46e5;
+    --color-primary-700: #4338ca;
+    --color-primary-800: #3730a3;
+    --color-primary-900: #231c4b;
+
+    --color-primary-900: #312e81;
+    --color-primary-800: #3730a3;
+    --color-primary-700: #4338ca;
+    --color-accent-400: #fbbf24;
+    --color-accent-500: #f59e0b;
+    --color-accent-600: #d97706;
+    --bg-default: #f8fafc;
+
+    /* accent amber */
+    --color-accent-50:  #fff8ed;
+    --color-accent-100: #fff1d6;
+    --color-accent-200: #ffe3a8;
+    --color-accent-300: #ffd67a;
+    --color-accent-400: #ffc84d;
+    --color-accent-500: #f59e0b;
+    --color-accent-600: #d97706;
+    --color-accent-700: #b45309;
+    --color-accent-800: #92400e;
+    --color-accent-900: #78350f;
+
+    /* neutrals / rich */
+    --color-rich-50:  #f8fafc;
+    --color-rich-100: #f1f5f9;
+    --color-rich-200: #e2e8f0;
+    --color-rich-300: #cbd5e1;
+    --color-rich-400: #94a3b8;
+    --color-rich-500: #64748b;
+    --color-rich-700: #334155;
+    --color-rich-900: #0b1220;
+
+    /* surface */
+    --bg-default: #f8fafc; /* subtle off-white page background */
+    --card-bg: #ffffff;
+    --muted-bg: #f1f5f9;
+  }
+
+  /* Global element/base styles */
+  html, body {
+    height: 100%;
+    background-color: var(--bg-default);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    color: var(--color-rich-900);
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+  }
+
+  a { color: var(--color-primary-500); }
+  a:hover { color: var(--color-primary-600); }
+
+  /* small helper for deep backgrounds */
+  .text-on-primary { color: white; }
+}
+
+/* Custom utilities / component-like classes in utilities layer */
+@layer utilities {
+  .btn-accent {
+    background-color: var(--color-accent-500);
+    color: var(--color-rich-900);
+    border-radius: 0.5rem;
+    padding: 0.5rem 1rem;
+    font-weight: 600;
+    box-shadow: 0 8px 24px rgba(246,160,29,0.12);
+  }
+  .btn-accent:hover { background-color: var(--color-accent-600); }
+
+  .card {
+    background: var(--card-bg);
+    border-radius: 0.75rem;
+    box-shadow: 0 10px 30px rgba(15,23,42,0.05);
+    padding: 1rem;
+  }
+
+  .cta-outline {
+    border: 1px solid rgba(99,102,241,0.12);
+    color: var(--color-primary-500);
+    padding: 0.5rem 1rem;
+    border-radius: 0.5rem;
+  }
+
+  .bg-muted { background-color: var(--muted-bg); }
+}
+@keyframes blob {
+  0% {
+    transform: translate(0px, 0px) scale(1);
+  }
+  33% {
+    transform: translate(30px, -50px) scale(1.1);
+  }
+  66% {
+    transform: translate(-20px, 20px) scale(0.9);
+  }
+  100% {
+    transform: translate(0px, 0px) scale(1);
+  }
+}
+
+.animate-blob {
+  animation: blob 20s infinite;
+}
+
+.animation-delay-2000 {
+  animation-delay: 2s;
+}
+
+.animation-delay-4000 {
+  animation-delay: 4s;
+}
+
