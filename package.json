@@ -4,10 +4,11 @@
   "private": true,
   "scripts": {
     "dev": "next dev --turbopack",
-    "build": "next build --turbopack",
-    "start": "next start",
-    "lint": "eslint",
-    "postinstall": "npm rebuild lightningcss || true"
+  "build": "next build --turbopack",
+  "start": "next start",
+  "lint": "eslint",
+  "postinstall": "npm rebuild lightningcss || true && npx prisma generate",
+  "vercel-build": "npx prisma generate && npx prisma migrate deploy && next build --turbopack"
   },
   "dependencies": {
     "@prisma/client": "^6.17.1",

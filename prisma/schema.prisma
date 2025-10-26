@@ -3,8 +3,9 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")   // Pooler → used in Vercel runtime
+  directUrl = env("DIRECT_URL")     // Direct → used by Prisma CLI when needed
 }
 
 enum Role {
