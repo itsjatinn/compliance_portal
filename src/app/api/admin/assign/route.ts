@@ -56,7 +56,7 @@ async function sendAssignmentEmailSG({
       ${
         tempPassword
           ? `
-        <p>We created an account for you. Use the credentials below to sign in and <strong>please change your password on first login</strong>.</p>
+        <p>We created an account for you or set a temporary password. Use the credentials below to sign in and <strong>please change your password on first login</strong>.</p>
 
         <table role="presentation" style="margin:8px 0 16px; border-collapse:collapse;">
           <tr>
@@ -149,6 +149,27 @@ function escapeHtml(s: string) {
     .replace(/'/g, "&#039;");
 }
 
+// Best-effort typed persistence of plaintext tempPassword (no raw SQL fallback)
+async function persistTempPasswordIfPossible(userId: string, tempPassword: string | null) {
+  if (!tempPassword) return false;
+  try {
+    await prisma.user.update({
+      where: { id: userId },
+      data: {
+        // @ts-ignore - only works if schema has the fields; wrapped in try/catch
+        tempPassword,
+        // @ts-ignore
+        tempPasswordIssuedAt: new Date(),
+      } as any,
+    });
+    console.log(`[DB] Stored tempPassword for user: ${userId}`);
+    return true;
+  } catch (err: any) {
+    console.warn(`[DB] Could not persist tempPassword for user ${userId}. Column may be missing.`, err?.message ?? err);
+    return false;
+  }
+}
+
 // ---------------- ASSIGN ROUTE ----------------
 type AssignRequestBody = {
   orgId?: string;
@@ -181,6 +202,7 @@ export async function POST(req: Request) {
       skipIfAlreadyAssigned = true,
     } = body;
 
+    // Validate course
     const course = await prisma.course.findUnique({
       where: { id: courseId },
       select: { id: true, title: true },
@@ -191,86 +213,103 @@ export async function POST(req: Request) {
         { status: 400 }
       );
     }
-
     const courseTitle = course.title ?? "Assigned Course";
+
     const results: any[] = [];
     let assignedCount = 0;
 
     for (const empId of employeeIds) {
       try {
-        // 1️⃣ find user by ID or email
-        let user =
-          (await prisma.user.findUnique({
-            where: { id: empId },
-            select: {
-              id: true,
-              email: true,
-              name: true,
-              role: true,
-              passwordHash: true,
-            },
-          })) || null;
-
-        const possibleEmail =
+        // --- robust user resolution & debug logging ---
+        console.log(`[ASSIGN DEBUG] processing empId=${empId}`);
+        let user: any = null;
+        let possibleEmail =
           (employeeEmailMap?.[empId] ?? null)?.trim().toLowerCase() ?? null;
-        if (!user && possibleEmail) {
-          user =
-            (await prisma.user.findUnique({
-              where: { email: possibleEmail },
-              select: {
-                id: true,
-                email: true,
-                name: true,
-                role: true,
-                passwordHash: true,
-              },
-            })) || null;
+
+        // 1) Try as user.id
+        try {
+          user = await prisma.user.findUnique({
+            where: { id: empId },
+            select: { id: true, email: true, name: true, role: true, passwordHash: true },
+          });
+          if (user) console.log(`[ASSIGN DEBUG] empId ${empId} resolved as user.id=${user.id}`);
+        } catch (e) {
+          console.warn(`[ASSIGN DEBUG] findUnique user by id failed for ${empId}`, (e as any)?.message ?? e);
         }
 
-        // 2️⃣ fallback: employee model (if exists)
+        // 2) If not found and mapping provided, try by email
+        if (!user && possibleEmail) {
+          try {
+            user = await prisma.user.findUnique({
+              where: { email: possibleEmail },
+              select: { id: true, email: true, name: true, role: true, passwordHash: true },
+            });
+            if (user) console.log(`[ASSIGN DEBUG] resolved user by provided email ${possibleEmail} -> user.id=${user.id}`);
+          } catch (e) {
+            console.warn(`[ASSIGN DEBUG] findUnique user by email failed for ${possibleEmail}`, (e as any)?.message ?? e);
+          }
+        }
+
+        // 3) If still not found, treat empId as employee id and check employee table
         if (!user) {
           try {
             const emp = await (prisma as any).employee?.findUnique?.({
               where: { id: empId },
               select: { userId: true, email: true },
             });
-            if (emp?.userId) {
-              user =
-                (await prisma.user.findUnique({
-                  where: { id: emp.userId },
-                  select: {
-                    id: true,
-                    email: true,
-                    name: true,
-                    role: true,
-                    passwordHash: true,
-                  },
-                })) || null;
-            } else if (emp?.email && !possibleEmail) {
-              const eEmail = String(emp.email).trim().toLowerCase();
-              user =
-                (await prisma.user.findUnique({
-                  where: { email: eEmail },
-                  select: {
-                    id: true,
-                    email: true,
-                    name: true,
-                    role: true,
-                    passwordHash: true,
-                  },
-                })) || null;
+
+            if (emp) {
+              if (emp.userId) {
+                try {
+                  user = await prisma.user.findUnique({
+                    where: { id: emp.userId },
+                    select: { id: true, email: true, name: true, role: true, passwordHash: true },
+                  });
+                  if (user) console.log(`[ASSIGN DEBUG] resolved employee(${empId}).userId=${emp.userId}`);
+                } catch (e) {
+                  console.warn(`[ASSIGN DEBUG] findUnique user by employee.userId failed for ${emp.userId}`, (e as any)?.message ?? e);
+                }
+              }
+
+              if (!user && emp.email && !possibleEmail) {
+                possibleEmail = String(emp.email).trim().toLowerCase();
+                try {
+                  user = await prisma.user.findUnique({
+                    where: { email: possibleEmail },
+                    select: { id: true, email: true, name: true, role: true, passwordHash: true },
+                  });
+                  if (user) console.log(`[ASSIGN DEBUG] resolved user by employee.email ${possibleEmail} -> user.id=${user.id}`);
+                } catch (e) {
+                  console.warn(`[ASSIGN DEBUG] findUnique user by employee.email failed for ${possibleEmail}`, (e as any)?.message ?? e);
+                }
+              }
+            } else {
+              console.log(`[ASSIGN DEBUG] no employee record found for id=${empId}`);
             }
-          } catch {
-            // silently ignore
+          } catch (e) {
+            console.warn(`[ASSIGN DEBUG] error reading employee model for ${empId}`, (e as any)?.message ?? e);
           }
         }
 
-        // 3️⃣ create user if missing
+        // 4) If still no user and createMissingUsers is false -> skip
+        if (!user && !createMissingUsers) {
+          results.push({
+            employeeId: empId,
+            assignedCreated: false,
+            userCreated: false,
+            error: "User not found and createMissingUsers is false or no email provided",
+          });
+          console.log(`[ASSIGN DEBUG] skipped empId=${empId} (no user, createMissingUsers=false)`);
+          continue;
+        }
+
+        // 5) Create user if missing and allowed
         let userCreated = false;
         let createdUserId: string | null = null;
         let tempPassword: string | null = null;
 
         if (!user && createMissingUsers) {
+          // Need an email to create user
           if (!possibleEmail) {
             results.push({
               employeeId: empId,
@@ -278,9 +317,11 @@ export async function POST(req: Request) {
               userCreated: false,
               error: "No email available to create user",
             });
+            console.log(`[ASSIGN DEBUG] cannot create user for empId=${empId} (no email)`);
             continue;
           }
 
+          // generate a random temporary password
           tempPassword =
             Math.random().toString(36).slice(2, 10) +
             Math.random().toString(36).slice(2, 6);
@@ -307,15 +348,25 @@ export async function POST(req: Request) {
           userCreated = true;
           createdUserId = newUser.id;
 
+          // persist plaintext tempPassword if schema supports it (best-effort)
+          try {
+            await persistTempPasswordIfPossible(newUser.id, tempPassword);
+          } catch (e) {
+            console.warn(`[ASSIGN DEBUG] persistTempPasswordIfPossible failed for ${newUser.id}`, (e as any)?.message ?? e);
+          }
+
+          // send email with temp password
           await sendAssignmentEmailSG({
             to: possibleEmail,
             courseTitle,
             tempPassword,
           });
+
+          console.log(`[ASSIGN DEBUG] created user ${newUser.id} for empId=${empId}`);
         }
 
-        // 4️⃣ assign temp password if user has none
-        if (user && !user.passwordHash && createMissingUsers) {
+        // 6) If user exists but has no passwordHash, set one now (regardless of createMissingUsers)
+        if (user && !user.passwordHash) {
           tempPassword =
             Math.random().toString(36).slice(2, 10) +
             Math.random().toString(36).slice(2, 6);
@@ -326,7 +377,11 @@ export async function POST(req: Request) {
             data: { passwordHash, mustResetPassword: true },
           });
 
-          user = { ...user, passwordHash };
+          try {
+            await persistTempPasswordIfPossible(user.id, tempPassword);
+          } catch (e) {
+            console.warn(`[ASSIGN DEBUG] persistTempPasswordIfPossible failed for ${user.id}`, (e as any)?.message ?? e);
+          }
 
           if (user.email) {
             await sendAssignmentEmailSG({
@@ -335,67 +390,91 @@ export async function POST(req: Request) {
               tempPassword,
             });
           }
+
+          user = { ...user, passwordHash };
+          console.log(`[ASSIGN DEBUG] set passwordHash for existing user ${user.id}`);
         }
 
         if (!user) {
+          // still not resolved
           results.push({
             employeeId: empId,
             assignedCreated: false,
             userCreated: false,
-            error:
-              "User not found and createMissingUsers is false or no email provided",
+            error: "User resolution failed",
           });
+          console.log(`[ASSIGN DEBUG] user resolution failed for empId=${empId}`);
           continue;
         }
 
-        // 5️⃣ prevent duplicate assignment
+        // 7) prevent duplicate assignment (with logging)
         if (skipIfAlreadyAssigned) {
-          const exists = await prisma.assignedCourse.findFirst({
-            where: { userId: user.id, courseId },
-          });
-          if (exists) {
-            results.push({
-              employeeId: empId,
-              userId: user.id,
-              assignedCreated: false,
-              userCreated,
-              createdUserId,
-              reason: "already_assigned",
-              assignedId: exists.id,
+          try {
+            const exists = await prisma.assignedCourse.findFirst({
+              where: { userId: user.id, courseId },
             });
-            continue;
+            console.log(`[ASSIGN DEBUG] exists for user=${user.id} course=${courseId}:`, !!exists);
+            if (exists) {
+              results.push({
+                employeeId: empId,
+                userId: user.id,
+                assignedCreated: false,
+                userCreated,
+                createdUserId,
+                reason: "already_assigned",
+                assignedId: exists.id,
+              });
+              continue;
+            }
+          } catch (e) {
+            console.error(`[ASSIGN DEBUG] exists check failed for user=${user.id} course=${courseId}`, (e as any)?.message ?? e);
+            // continue to attempt create (but wrap create in try/catch)
           }
         }
 
-        // 6️⃣ create assigned course
-        const assigned = await prisma.assignedCourse.create({
-          data: {
+        // 8) create assigned course (with try/catch)
+        try {
+          const assigned = await prisma.assignedCourse.create({
+            data: {
+              userId: user.id,
+              courseId,
+              orgId: orgId ?? undefined,
+              assignedById: assignerId ?? undefined,
+              progress: 0,
+              status: "ASSIGNED" as AssignmentStatus,
+              details: {},
+            },
+          });
+
+          assignedCount++;
+
+          // notify existing users (if no temp password was created we still notify as before)
+          if (!userCreated && user.email && !tempPassword) {
+            await sendAssignmentEmailSG({ to: user.email, courseTitle });
+          }
+
+          results.push({
+            employeeId: empId,
             userId: user.id,
-            courseId,
-            orgId: orgId ?? undefined,
-            assignedById: assignerId ?? undefined,
-            progress: 0,
-            status: "ASSIGNED" as AssignmentStatus,
-            details: {},
-          },
-        });
+            assignedCreated: true,
+            assignedId: assigned.id,
+            userCreated,
+            createdUserId,
+            // include plaintext only for items we generated in this request (or updated password)
+            tempPassword: userCreated || tempPassword ? tempPassword : undefined,
+          });
 
-        assignedCount++;
-
-        // 7️⃣ notify existing users (no temp password)
-        if (!userCreated && user.email) {
-          await sendAssignmentEmailSG({ to: user.email, courseTitle });
+          console.log(`[ASSIGN DEBUG] created assignment assignedId=${assigned.id} for user=${user.id}`);
+        } catch (createErr) {
+          console.error("[ASSIGN DEBUG] create failed for user", user?.id ?? "null", createErr);
+          results.push({
+            employeeId: empId,
+            userId: user?.id ?? null,
+            assignedCreated: false,
+            error: (createErr as any)?.message ?? String(createErr),
+          });
+          continue;
         }
-
-        results.push({
-          employeeId: empId,
-          userId: user.id,
-          assignedCreated: true,
-          assignedId: assigned.id,
-          userCreated,
-          createdUserId,
-          tempPassword: userCreated || tempPassword ? tempPassword : undefined,
-        });
       } catch (err: any) {
         console.error("Assign error for employee:", empId, err);
         results.push({
@@ -404,7 +483,10 @@ export async function POST(req: Request) {
           error: err?.message ?? String(err),
         });
       }
-    }
+    } // end for loop
+
+    // final debug dump
+    console.log("[ASSIGN] results:", JSON.stringify(results, null, 2), "assignedCount:", assignedCount);
 
     return NextResponse.json(
       { success: true, assignedCount, results },

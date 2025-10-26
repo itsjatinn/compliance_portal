@@ -5,5 +5,12 @@
     "email": "jatinpatel2022@vibhopal.ac.in",
     "role": "employee",
     "createdAt": "2025-10-26T07:23:19.524Z"
+  },
+  {
+    "id": "emp_i9v4jbc",
+    "name": "jatin",
+    "email": "jatin@gmail.com",
+    "role": "employee",
+    "createdAt": "2025-10-26T07:43:03.369Z"
   }
 ]

@@ -128,8 +128,27 @@ export default function AssignCoursePanel({
           return;
         }
 
-        const data = (await res.json().catch(() => [])) as Employee[];
-        setEmployees(data || []);
+        // NORMALIZE the response to an array in common shapes
+        const payload = await res.json().catch(() => null);
+        let list: Employee[] = [];
+
+        if (Array.isArray(payload)) {
+          list = payload;
+        } else if (payload && typeof payload === "object") {
+          if (Array.isArray((payload as any).employees)) {
+            list = (payload as any).employees;
+          } else if (Array.isArray((payload as any).data)) {
+            list = (payload as any).data;
+          } else if (Array.isArray((payload as any).items)) {
+            list = (payload as any).items;
+          } else {
+            // unexpected shape: maybe server returned object keyed by id
+            console.warn("Unexpected employees payload shape, normalizing to empty array:", payload);
+            list = [];
+          }
+        }
+
+        setEmployees(list || []);
         setSelectedEmployeeIds({});
         setSelectAllChecked(false);
       } catch (err) {
@@ -146,10 +165,13 @@ export default function AssignCoursePanel({
   }, [selectedOrg, apiBase]);
 
   // --- Helpers ---
-  const filteredEmployees = () => {
+  const filteredEmployees = (): Employee[] => {
+    // Ensure we always work with an array
+    const base: Employee[] = Array.isArray(employees) ? employees : [];
+
     const q = searchTerm.trim().toLowerCase();
-    if (!q) return employees;
-    return employees.filter((e) =>
+    if (!q) return base;
+    return base.filter((e) =>
       `${e.name ?? ""} ${e.email ?? ""}`.toLowerCase().includes(q)
     );
   };
@@ -173,13 +195,13 @@ export default function AssignCoursePanel({
     if (next) {
       const visible = filteredEmployees();
       const map: Record<string, boolean> = {};
-      for (const e of visible) map[e.id] = true;
+      for (const e of visible) if (e.id) map[e.id] = true;
       setSelectedEmployeeIds((prev) => ({ ...prev, ...map }));
     } else {
       const visible = filteredEmployees();
       setSelectedEmployeeIds((prev) => {
         const copy = { ...prev };
-        for (const e of visible) delete copy[e.id];
+        for (const e of visible) if (e.id) delete copy[e.id];
         return copy;
       });
     }
@@ -221,7 +243,7 @@ export default function AssignCoursePanel({
     try {
       // Map id->email for selected employees
       const idToEmail: Record<string, string | null> = {};
-      for (const e of employees) {
+      for (const e of Array.isArray(employees) ? employees : []) {
         if (e.id) idToEmail[e.id] = e.email ?? null;
       }
 

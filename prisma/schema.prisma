@@ -28,6 +28,8 @@ model User {
   passwordHash      String?
   mustResetPassword Boolean  @default(false)
   role              Role     @default(LEARNER)
+  tempPassword          String?   // WARNING: plaintext password (risky)
+  tempPasswordIssuedAt  DateTime?
   createdAt         DateTime @default(now())
 
   // Organization relation (child side) — onDelete: Cascade ensures FK has ON DELETE CASCADE.

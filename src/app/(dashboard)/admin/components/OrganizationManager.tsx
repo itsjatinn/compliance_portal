@@ -49,6 +49,26 @@ export default function OrganizationManager({ onClose }: { onClose?: () => void 
   const [bulkPreview, setBulkPreview] = useState<EmployeeRow[]>([]);
   const [bulkErrors, setBulkErrors] = useState<string[]>([]);
 
+  /* ---------------- role normalization helper ---------------- */
+
+  // normalize role strings to valid Prisma Role enum values
+  function mapRole(input?: string): "ADMIN" | "ORG_ADMIN" | "LEARNER" {
+    if (!input) return "LEARNER";
+    const r = input.trim().toLowerCase();
+
+    if (r === "admin" || r === "administrator") return "ADMIN";
+    if (r === "org_admin" || r === "orgadmin" || r === "org-admin" || r === "org admin" || r === "org_admin") return "ORG_ADMIN";
+    if (r === "learner" || r === "student" || r === "employee" || r === "user") return "LEARNER";
+
+    // Accept exact enum tokens case-insensitive
+    if (r === "admin") return "ADMIN";
+    if (r === "org_admin" || r === "org-admin" || r === "orgadmin") return "ORG_ADMIN";
+    if (r === "learner") return "LEARNER";
+
+    // fallback
+    return "LEARNER";
+  }
+
   /* ---------------- network helpers ---------------- */
 
   async function doJsonPost(url: string, body: any) {
@@ -79,9 +99,15 @@ export default function OrganizationManager({ onClose }: { onClose?: () => void 
         setSelectedOrg((prev) => (prev ? prev : null));
         return;
       }
-      const data = await res.json();
+      const data = await res.json().catch(() => null);
       if (Array.isArray(data)) {
         const arr = data as Org[];
+        setOrgs(arr);
+        setSelectedOrg((prev) =>
+          prev && arr.some((o) => o.id === prev) ? prev : arr[0]?.id ?? null
+        );
+      } else if (data && Array.isArray((data as any).orgs)) {
+        const arr = (data as any).orgs as Org[];
         setOrgs(arr);
         setSelectedOrg((prev) =>
           prev && arr.some((o) => o.id === prev) ? prev : arr[0]?.id ?? null
@@ -126,17 +152,28 @@ export default function OrganizationManager({ onClose }: { onClose?: () => void 
       }
 
       const data = await parseBody(res);
+
+      // handle different response shapes:
+      let rowsData: any[] = [];
+
       if (Array.isArray(data)) {
-        const rows: EmployeeRow[] = (data as any[]).map((x) => ({
-          id: x.id ?? x._id ?? undefined,
-          name: x.name ?? x.fullname ?? "",
-          email: x.email ?? "",
-          role: x.role ?? x.position ?? "",
-        }));
-        setEmployees(rows);
+        rowsData = data;
+      } else if (data && Array.isArray((data as any).employees)) {
+        rowsData = (data as any).employees;
+      } else if (data && Array.isArray((data as any).data)) {
+        rowsData = (data as any).data;
       } else {
         setEmployees([]);
+        return;
       }
+
+      const rows: EmployeeRow[] = (rowsData as any[]).map((x) => ({
+        id: x.id ?? x._id ?? undefined,
+        name: x.name ?? x.fullname ?? "",
+        email: x.email ?? "",
+        role: x.role ?? x.position ?? "",
+      }));
+      setEmployees(rows);
     } catch (err) {
       console.error("fetchEmployeesForOrg error:", err);
       setEmployees([]);
@@ -196,7 +233,11 @@ export default function OrganizationManager({ onClose }: { onClose?: () => void 
 
     try {
       const orgEndpoint = `/api/admin/orgs/${encodeURIComponent(selectedOrg)}/employees`;
-      const singlePayload = { name: empName.trim(), email: empEmail.trim(), role: empRole?.trim() || "employee" };
+      const singlePayload = {
+        name: empName.trim(),
+        email: empEmail.trim(),
+        role: mapRole(empRole),
+      };
       let res = await doJsonPost(orgEndpoint, singlePayload);
 
       if (res.status === 404 || res.status === 405) {
@@ -236,60 +277,52 @@ export default function OrganizationManager({ onClose }: { onClose?: () => void 
   /* ---------------- delete org ---------------- */
 
   async function deleteOrg(id: string | null) {
-  if (!id) return;
-  if (!confirm("Delete this organization? This will remove the organisation and its employees.")) return;
-  setLoadingAction(true);
+    if (!id) return;
+    if (!confirm("Delete this organization? This will remove the organisation and its employees.")) return;
+    setLoadingAction(true);
 
-  try {
-    const res = await fetch(`/api/admin/orgs/${encodeURIComponent(id)}`, { method: "DELETE" });
+    try {
+      const res = await fetch(`/api/admin/orgs/${encodeURIComponent(id)}`, { method: "DELETE" });
 
-    if (!res.ok) {
-      // try to parse JSON error body first (server returns JSON as shown)
-      let parsed: any = null;
-      try {
-        // many servers return JSON error body
-        parsed = await res.json();
-      } catch (e) {
-        // fallback to text if not JSON
-        const txt = await res.text().catch(() => "");
-        console.error("Delete org failed (non-json):", res.status, txt);
-        alert(`Failed to delete organization (status ${res.status}). See console for details.`);
+      if (!res.ok) {
+        let parsed: any = null;
+        try {
+          parsed = await res.json();
+        } catch (e) {
+          const txt = await res.text().catch(() => "");
+          console.error("Delete org failed (non-json):", res.status, txt);
+          alert(`Failed to delete organization (status ${res.status}). See console for details.`);
+          return;
+        }
+
+        console.error("Delete org failed:", res.status, parsed);
+        const serverMessage = parsed?.error ?? JSON.stringify(parsed);
+        const assignmentCount = parsed?.assignmentCount ?? 0;
+
+        if (assignmentCount && assignmentCount > 0) {
+          alert(
+            `Cannot delete organization: ${serverMessage}\n\n` +
+              `There are ${assignmentCount} course(s) assigned to this organization. ` +
+              `Please reassign or remove those course(s) first (or use the Courses admin to update their organisation).`
+          );
+        } else {
+          alert(`Failed to delete organization: ${serverMessage}`);
+        }
+
         return;
       }
 
-      // If server returned structured error info, present it nicely
-      console.error("Delete org failed:", res.status, parsed);
-      const serverMessage = parsed?.error ?? JSON.stringify(parsed);
-      const assignmentCount = parsed?.assignmentCount ?? 0;
-
-      if (assignmentCount && assignmentCount > 0) {
-        // friendly actionable message
-        alert(
-          `Cannot delete organization: ${serverMessage}\n\n` +
-          `There are ${assignmentCount} course(s) assigned to this organization. ` +
-          `Please reassign or remove those course(s) first (or use the Courses admin to update their organisation).`
-        );
-      } else {
-        // generic server message
-        alert(`Failed to delete organization: ${serverMessage}`);
-      }
-
-      return;
+      setOrgs((prev) => prev.filter((o) => o.id !== id));
+      setSelectedOrg((prev) => (prev === id ? null : prev));
+      setEmployees(null);
+      alert("Organization deleted");
+    } catch (err) {
+      console.error("deleteOrg error:", err);
+      alert("Failed to delete organization (network error)");
+    } finally {
+      setLoadingAction(false);
     }
-
-    // success
-    setOrgs((prev) => prev.filter((o) => o.id !== id));
-    setSelectedOrg((prev) => (prev === id ? null : prev));
-    setEmployees(null);
-    alert("Organization deleted");
-  } catch (err) {
-    console.error("deleteOrg error:", err);
-    alert("Failed to delete organization (network error)");
-  } finally {
-    setLoadingAction(false);
   }
-}
-
 
   /* ---------------- delete employee (calls your existing route /api/admin/employees/:id?orgId=...) ---------------- */
 
@@ -323,7 +356,6 @@ export default function OrganizationManager({ onClose }: { onClose?: () => void 
         }
       }
 
-      // --- Primary: DELETE /api/admin/employees/:id?orgId=... (matches your existing handler) ---
       if (emp.id) {
         const epId = `/api/admin/employees/${encodeURIComponent(emp.id)}?orgId=${encodeURIComponent(orgId)}`;
         const rId = await tryDelete(epId, { method: "DELETE" });
@@ -336,7 +368,6 @@ export default function OrganizationManager({ onClose }: { onClose?: () => void 
         }
       }
 
-      // --- Secondary fallback: DELETE by email on global endpoint ---
       {
         const epEmail = `/api/admin/employees?orgId=${encodeURIComponent(orgId)}&email=${encodeURIComponent(emp.email)}`;
         const rEmail = await tryDelete(epEmail, { method: "DELETE" });
@@ -349,7 +380,6 @@ export default function OrganizationManager({ onClose }: { onClose?: () => void 
         }
       }
 
-      // --- Post body fallback (if you add a POST delete route later) ---
       {
         const epPost = `/api/admin/employees/delete`;
         const rPost = await tryDelete(epPost, {
@@ -408,13 +438,13 @@ export default function OrganizationManager({ onClose }: { onClose?: () => void 
         (data as any[]).forEach((r, i) => {
           const name = (r.name || r.fullname || "").trim();
           const email = (r.email || "").trim();
-          const role = (r.role || "").trim();
+          const roleInput = (r.role || "").trim();
           if (!name || !email) {
             errors.push(`Row ${i + 2}: missing name or email`);
           } else if (!/^\S+@\S+\.\S+$/.test(email)) {
             errors.push(`Row ${i + 2}: invalid email (${email})`);
           } else {
-            rows.push({ name, email, role });
+            rows.push({ name, email, role: roleInput });
           }
         });
         setCsvPreview(rows);
@@ -438,7 +468,7 @@ export default function OrganizationManager({ onClose }: { onClose?: () => void 
 
       let useGlobal = false;
       const testRow = csvPreview[0];
-      let testRes = await doJsonPost(orgEndpoint, { name: testRow.name, email: testRow.email, role: testRow.role ?? "employee" });
+      let testRes = await doJsonPost(orgEndpoint, { name: testRow.name, email: testRow.email, role: mapRole(testRow.role) });
 
       if (testRes.status === 404 || testRes.status === 405) {
         console.warn(`${orgEndpoint} returned ${testRes.status} on test — will use global endpoint per-row`);
@@ -459,8 +489,8 @@ export default function OrganizationManager({ onClose }: { onClose?: () => void 
       for (let i = startIndex; i < csvPreview.length; i++) {
         const r = csvPreview[i];
         const payload = useGlobal
-          ? { orgId: selectedOrg, name: r.name, email: r.email, role: r.role ?? "employee" }
-          : { name: r.name, email: r.email, role: r.role ?? "employee" };
+          ? { orgId: selectedOrg, name: r.name, email: r.email, role: mapRole(r.role) }
+          : { name: r.name, email: r.email, role: mapRole(r.role) };
 
         const endpoint = useGlobal ? globalEndpoint : orgEndpoint;
         const rres = await doJsonPost(endpoint, payload);
@@ -525,7 +555,7 @@ export default function OrganizationManager({ onClose }: { onClose?: () => void 
 
       let useGlobal = false;
       const testRow = bulkPreview[0];
-      let testRes = await doJsonPost(orgEndpoint, { name: testRow.name, email: testRow.email, role: testRow.role ?? "employee" });
+      let testRes = await doJsonPost(orgEndpoint, { name: testRow.name, email: testRow.email, role: mapRole(testRow.role) });
 
       if (testRes.status === 404 || testRes.status === 405) {
         useGlobal = true;
@@ -544,8 +574,8 @@ export default function OrganizationManager({ onClose }: { onClose?: () => void 
       for (let i = startIndex; i < bulkPreview.length; i++) {
         const r = bulkPreview[i];
         const payload = useGlobal
-          ? { orgId: selectedOrg, name: r.name, email: r.email, role: r.role ?? "employee" }
-          : { name: r.name, email: r.email, role: r.role ?? "employee" };
+          ? { orgId: selectedOrg, name: r.name, email: r.email, role: mapRole(r.role) }
+          : { name: r.name, email: r.email, role: mapRole(r.role) };
 
         const endpoint = useGlobal ? globalEndpoint : orgEndpoint;
         const rres = await doJsonPost(endpoint, payload);
@@ -611,7 +641,6 @@ export default function OrganizationManager({ onClose }: { onClose?: () => void 
                     >
                       <option value="">Select organization</option>
                       {orgs.map((o) => {
-                        // Show loaded employee count for current selected org, otherwise '-'
                         const countText = o.id === selectedOrg ? String(employees?.length ?? 0) : "-";
                         return (
                           <option key={o.id} value={o.id}>
