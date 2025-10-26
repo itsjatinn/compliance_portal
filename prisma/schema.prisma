@@ -30,6 +30,10 @@ model User {
   role              Role     @default(LEARNER)
   createdAt         DateTime @default(now())
 
+  // Organization relation (child side) — onDelete: Cascade ensures FK has ON DELETE CASCADE.
+  orgId        String? 
+  organization Organization? @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
   // Relations
   resetTokens     PasswordResetToken[]
   assignedCourses AssignedCourse[]
@@ -86,9 +90,9 @@ model Organization {
   // Relations
   assignments  AssignedCourse[]
   certificates Certificate[]
+  users        User[]      // child side holds the onDelete cascade
 }
 
-/// Persist per-user per-course progress and quiz reports
 model Progress {
   id       String @id @default(cuid())
   userId   String
@@ -106,7 +110,6 @@ model Progress {
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
   course Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
 
-  // ✅ FIXED: Removed `name:` so Prisma generates userId_courseId alias
   @@unique([userId, courseId])
   @@index([userId])
   @@index([courseId])
