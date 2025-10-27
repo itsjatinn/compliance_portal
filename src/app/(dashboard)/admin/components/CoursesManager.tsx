@@ -426,35 +426,77 @@ export default function CoursesManager({ apiBase = "/api/admin" }: { apiBase?: s
   }, []);
 
   /* ---------------- Upload Helper (PRESIGN + direct PUT to R2) ---------------- */
- const uploadFile = useCallback(
+ // replace existing uploadFile with this presign-based version
+const uploadFile = useCallback(
   async (file: File | null | undefined, timeoutMs = 10 * 60 * 1000, folder = "videos"): Promise<string | null> => {
     if (!file) return null;
 
-    const fd = new FormData();
-    fd.append("file", file);
-    fd.append("folder", folder); // optional; server validates allowedFolders
+    // 1) ask server for a signed PUT URL + key
+    const presignRes = await fetch(`/api/admin/uploads`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        filename: file.name,
+        contentType: file.type || "application/octet-stream",
+        folder,
+        // expiresInSeconds: 3600 // optionally
+      }),
+    });
 
+    if (!presignRes.ok) {
+      const txt = await presignRes.text().catch(() => "");
+      throw new Error(txt || `Presign failed (${presignRes.status})`);
+    }
+
+    const presignJson = await presignRes.json().catch(() => null);
+    if (!presignJson || !presignJson.url || !presignJson.key) {
+      throw new Error(`Invalid presign response: ${JSON.stringify(presignJson)}`);
+    }
+
+    const { url: signedUrl, key, contentType } = presignJson;
+
+    // 2) perform direct PUT to R2 using the signed URL (browser -> R2)
+    // do not set Accept, keep minimal headers; set Content-Type to match server expectation
     const controller = new AbortController();
     const to = setTimeout(() => controller.abort(), timeoutMs);
-
     try {
-      const res = await fetch(`/api/admin/uploads/proxy`, {
-        method: "POST",
-        body: fd,
+      const putRes = await fetch(signedUrl, {
+        method: "PUT",
+        headers: {
+          // Cloudflare R2 presigned PUT typically needs Content-Type to be same as signed contentType
+          "Content-Type": contentType || file.type || "application/octet-stream",
+        },
+        body: file,
         signal: controller.signal,
       });
       clearTimeout(to);
 
-      if (!res.ok) {
-        const txt = await res.text().catch(() => "");
-        throw new Error(txt || `Upload failed (${res.status})`);
+      if (!putRes.ok) {
+        const txt = await putRes.text().catch(() => "");
+        throw new Error(txt || `Upload (PUT) failed (${putRes.status})`);
       }
 
-      const json = await res.json().catch(() => null);
-      if (!json || !json.ok || !json.key) {
-        throw new Error(`Invalid upload response: ${JSON.stringify(json)}`);
+      // 3) Optionally notify your server the upload completed (save metadata / size)
+      // Not required for R2 to work; but useful to persist the key in DB.
+      try {
+        await fetch(`/api/admin/uploads/complete`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            key,
+            filename: file.name,
+            size: file.size,
+            folder,
+            // meta: { any: "data" }
+          }),
+        });
+      } catch (e) {
+        // non-fatal: we still return key even if metadata call fails
+        console.warn("upload complete notification failed", e);
       }
-      return String(json.key);
+
+      // Return the object key (store this in DB)
+      return String(key);
     } catch (err: any) {
       clearTimeout(to);
       if (err?.name === "AbortError") throw new Error("Upload timed out");
