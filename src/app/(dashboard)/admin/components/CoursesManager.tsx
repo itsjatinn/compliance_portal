@@ -4,6 +4,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { X, BookOpen, Plus, UploadCloud, Video, PlusCircle, Edit2, Trash2 } from "lucide-react";
+import UploadProgressModal from "./UploadProgressModal";
 
 /* ---------------- Types ---------------- */
 type QuizQuestion = {
@@ -56,7 +57,12 @@ type CourseMeta = {
   [k: string]: any;
 };
 
-
+/** Local FileProgress type — UploadProgressModal (you provided) does not export this, so keep it local here */
+type FileProgress = {
+  name: string;
+  percent: number; // 0..100
+  status: "queued" | "uploading" | "done" | "failed";
+};
 
 function uid(prefix = "c") {
   return `${prefix}_${Math.random().toString(36).slice(2, 10)}`;
@@ -319,6 +325,18 @@ export default function CoursesManager({ apiBase = "/api/admin" }: { apiBase?: s
   const [editingMetaId, setEditingMetaId] = useState<string | null>(null);
   const [loadingEditor, setLoadingEditor] = useState(false);
 
+  /* ---------------- progress model ---------------- */
+  const [uploadModalOpen, setUploadModalOpen] = useState(false);
+  const [uploadPercent, setUploadPercent] = useState(0);
+  const [uploadMessage, setUploadMessage] = useState<string | null>(null);
+  const [uploadFileList, setUploadFileList] = useState<FileProgress[]>([]);
+
+  // safe setter: clamp percent to 0..100 and round to integer
+  const setSafeUploadPercent = (value: number) => {
+    const clamped = Math.max(0, Math.min(100, Math.round(Number(value))));
+    setUploadPercent(clamped);
+  };
+
   /* ---------------- Fetch / Refresh ---------------- */
   const refreshCourses = useCallback(async () => {
     setLoadingCourses(true);
@@ -426,86 +444,79 @@ export default function CoursesManager({ apiBase = "/api/admin" }: { apiBase?: s
   }, []);
 
   /* ---------------- Upload Helper (PRESIGN + direct PUT to R2) ---------------- */
- // replace existing uploadFile with this presign-based version
-const uploadFile = useCallback(
-  async (file: File | null | undefined, timeoutMs = 10 * 60 * 1000, folder = "videos"): Promise<string | null> => {
-    if (!file) return null;
+  // replace existing uploadFile with this presign-based version
+  const uploadFile = useCallback(
+    async (file: File | null | undefined, timeoutMs = 10 * 60 * 1000, folder = "videos"): Promise<string | null> => {
+      if (!file) return null;
 
-    // 1) ask server for a signed PUT URL + key
-    const presignRes = await fetch(`/api/admin/uploads`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        filename: file.name,
-        contentType: file.type || "application/octet-stream",
-        folder,
-        // expiresInSeconds: 3600 // optionally
-      }),
-    });
-
-    if (!presignRes.ok) {
-      const txt = await presignRes.text().catch(() => "");
-      throw new Error(txt || `Presign failed (${presignRes.status})`);
-    }
-
-    const presignJson = await presignRes.json().catch(() => null);
-    if (!presignJson || !presignJson.url || !presignJson.key) {
-      throw new Error(`Invalid presign response: ${JSON.stringify(presignJson)}`);
-    }
-
-    const { url: signedUrl, key, contentType } = presignJson;
-
-    // 2) perform direct PUT to R2 using the signed URL (browser -> R2)
-    // do not set Accept, keep minimal headers; set Content-Type to match server expectation
-    const controller = new AbortController();
-    const to = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      const putRes = await fetch(signedUrl, {
-        method: "PUT",
-        headers: {
-          // Cloudflare R2 presigned PUT typically needs Content-Type to be same as signed contentType
-          "Content-Type": contentType || file.type || "application/octet-stream",
-        },
-        body: file,
-        signal: controller.signal,
+      // 1) ask server for a signed PUT URL + key
+      const presignRes = await fetch(`/api/admin/uploads`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          filename: file.name,
+          contentType: file.type || "application/octet-stream",
+          folder,
+        }),
       });
-      clearTimeout(to);
 
-      if (!putRes.ok) {
-        const txt = await putRes.text().catch(() => "");
-        throw new Error(txt || `Upload (PUT) failed (${putRes.status})`);
+      if (!presignRes.ok) {
+        const txt = await presignRes.text().catch(() => "");
+        throw new Error(txt || `Presign failed (${presignRes.status})`);
       }
 
-      // 3) Optionally notify your server the upload completed (save metadata / size)
-      // Not required for R2 to work; but useful to persist the key in DB.
+      const presignJson = await presignRes.json().catch(() => null);
+      if (!presignJson || !presignJson.url || !presignJson.key) {
+        throw new Error(`Invalid presign response: ${JSON.stringify(presignJson)}`);
+      }
+
+      const { url: signedUrl, key, contentType } = presignJson;
+
+      // 2) perform direct PUT to R2 using the signed URL (browser -> R2)
+      const controller = new AbortController();
+      const to = setTimeout(() => controller.abort(), timeoutMs);
       try {
-        await fetch(`/api/admin/uploads/complete`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            key,
-            filename: file.name,
-            size: file.size,
-            folder,
-            // meta: { any: "data" }
-          }),
+        const putRes = await fetch(signedUrl, {
+          method: "PUT",
+          headers: {
+            "Content-Type": contentType || file.type || "application/octet-stream",
+          },
+          body: file,
+          signal: controller.signal,
         });
-      } catch (e) {
-        // non-fatal: we still return key even if metadata call fails
-        console.warn("upload complete notification failed", e);
+        clearTimeout(to);
+
+        if (!putRes.ok) {
+          const txt = await putRes.text().catch(() => "");
+          throw new Error(txt || `Upload (PUT) failed (${putRes.status})`);
+        }
+
+        // 3) notify server the upload completed (optional)
+        try {
+          await fetch(`/api/admin/uploads/complete`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              key,
+              filename: file.name,
+              size: file.size,
+              folder,
+            }),
+          });
+        } catch (e) {
+          console.warn("upload complete notification failed", e);
+        }
+
+        // Return the object key (store this in DB)
+        return String(key);
+      } catch (err: any) {
+        clearTimeout(to);
+        if (err?.name === "AbortError") throw new Error("Upload timed out");
+        throw err;
       }
-
-      // Return the object key (store this in DB)
-      return String(key);
-    } catch (err: any) {
-      clearTimeout(to);
-      if (err?.name === "AbortError") throw new Error("Upload timed out");
-      throw err;
-    }
-  },
-  []
-);
-
+    },
+    []
+  );
 
   /* ---------------- Save Course ---------------- */
   const saveCourse = useCallback(async () => {
@@ -522,63 +533,129 @@ const uploadFile = useCallback(
       return;
     }
 
+    // begin
     setSaving(true);
     setMessage(null);
 
+    // close editor and open progress modal
+    setEditorOpen(false);
+    setUploadModalOpen(true);
+    setSafeUploadPercent(0);
+    setUploadMessage("Preparing uploads...");
+
+    // build simple file list for UI
+    const filesToUploadSimple: { id: string; name: string; file?: File }[] = [];
+    if (course.thumbnail) filesToUploadSimple.push({ id: "thumbnail", name: "Thumbnail", file: course.thumbnail });
+    if (course.introVideo) filesToUploadSimple.push({ id: "introVideo", name: "Intro video", file: course.introVideo });
+    for (const l of course.lessons) {
+      if (l.resourceFile) filesToUploadSimple.push({ id: l.id, name: `Lesson: ${l.title || l.id}`, file: l.resourceFile });
+    }
+
+    const totalFiles = filesToUploadSimple.length || 1;
+    let completedFiles = 0;
+
+    // init upload modal list
+    setUploadFileList(filesToUploadSimple.map((f) => ({ name: f.name, percent: 0, status: "queued" as FileProgress["status"] })));
+    setUploadMessage(`Uploading 0 of ${totalFiles} files`);
+
     try {
-      // For images/thumbnails, use folder "thumbnails" or "images" depending on your R2 setup
-      // If user didn't upload, use DEFAULT_THUMBNAIL_KEY (R2 key)
-      const imageUrlOrKey = course.thumbnail
-        ? await uploadFile(course.thumbnail, 10 * 60 * 1000, "thumbnails")
-        : DEFAULT_THUMBNAIL_KEY;
-
-      const introVideoUrlOrKey = course.introVideo ? await uploadFile(course.introVideo, 10 * 60 * 1000, "videos") : (isValidUrlString(introVideoPreview) ? introVideoPreview : null);
-
-      const lessonsPayload: any[] = [];
-
-      for (const l of course.lessons) {
+      // ---------------- 1) Upload thumbnail ----------------
+      let imageUrlOrKey: any = DEFAULT_THUMBNAIL_KEY;
+      if (course.thumbnail) {
+        setUploadMessage("Uploading thumbnail...");
         try {
-          const resourceUrlOrKey = l.resourceFile ? await uploadFile(l.resourceFile, 10 * 60 * 1000, "videos") : l.resourceUrl ?? null;
-          const lessonDurationSeconds = parseDurationToSeconds(l.duration);
-
-          const parsedPreview: QuizQuestion[] | null = l.__parsedQuizzes ?? (l.quizPreview ? safeParseQuizzes(l.quizPreview) : null);
-
-          let contentToSend: string | null = l.content ?? null;
-
-          if (parsedPreview && parsedPreview.length > 0) {
-            const assigned = assignAppearTimes(parsedPreview, lessonDurationSeconds);
-            try {
-              contentToSend = JSON.stringify({ quizzes: assigned });
-            } catch {
-              contentToSend = l.content ?? null;
-            }
-          } else if (l.quizPreview && !parsedPreview) {
-            contentToSend = l.content ?? l.quizPreview;
-          }
-
-          lessonsPayload.push({
-            id: l.id,
-            title: l.title || null,
-            duration: lessonDurationSeconds,
-            summary: l.summary ?? null,
-            content: contentToSend ?? null,
-            resourceUrl: resourceUrlOrKey ?? null,
-          });
-        } catch (lessonErr: any) {
-          console.error("lesson upload failed for", l.id, lessonErr);
-          lessonsPayload.push({
-            id: l.id,
-            title: l.title || null,
-            duration: parseDurationToSeconds(l.duration),
-            summary: l.summary ?? null,
-            content: l.content ?? null,
-            resourceUrl: l.resourceUrl ?? null,
-          });
+          const key = await uploadFile(course.thumbnail, 10 * 60 * 1000, "thumbnails");
+          imageUrlOrKey = key ?? DEFAULT_THUMBNAIL_KEY;
+          // increment safely
+          completedFiles = Math.min(totalFiles, completedFiles + 1);
+          setSafeUploadPercent((completedFiles / totalFiles) * 100);
+          setUploadFileList((prev) => prev.map((p) => (p.name === "Thumbnail" ? { ...p, percent: 100, status: "done" } : p)));
+          setUploadMessage(`Uploaded ${completedFiles} / ${totalFiles}`);
+        } catch (thumbErr: any) {
+          console.error("Thumbnail upload failed:", thumbErr);
+          setUploadFileList((prev) => prev.map((p) => (p.name === "Thumbnail" ? { ...p, percent: 0, status: "failed" } : p)));
+          imageUrlOrKey = DEFAULT_THUMBNAIL_KEY;
+          completedFiles = Math.min(totalFiles, completedFiles + 1);
+          setSafeUploadPercent((completedFiles / totalFiles) * 100);
+          setUploadMessage(`Uploaded ${completedFiles} / ${totalFiles} (thumbnail failed)`);
         }
       }
 
-      const courseDurationSeconds = parseDurationToSeconds(course.duration);
+      // ---------------- 2) Upload intro video ----------------
+      let introVideoUrlOrKey: any = isValidUrlString(introVideoPreview) ? introVideoPreview : null;
+      if (course.introVideo) {
+        setUploadMessage("Uploading intro video...");
+        try {
+          const key = await uploadFile(course.introVideo, 10 * 60 * 1000, "videos");
+          introVideoUrlOrKey = key ?? (isValidUrlString(introVideoPreview) ? introVideoPreview : null);
+          completedFiles = Math.min(totalFiles, completedFiles + 1);
+          setSafeUploadPercent((completedFiles / totalFiles) * 100);
+          setUploadFileList((prev) => prev.map((p) => (p.name === "Intro video" ? { ...p, percent: 100, status: "done" } : p)));
+          setUploadMessage(`Uploaded ${completedFiles} / ${totalFiles}`);
+        } catch (introErr: any) {
+          console.error("Intro upload failed:", introErr);
+          setUploadFileList((prev) => prev.map((p) => (p.name === "Intro video" ? { ...p, percent: 0, status: "failed" } : p)));
+          introVideoUrlOrKey = isValidUrlString(introVideoPreview) ? introVideoPreview : null;
+          completedFiles = Math.min(totalFiles, completedFiles + 1);
+          setSafeUploadPercent((completedFiles / totalFiles) * 100);
+          setUploadMessage(`Uploaded ${completedFiles} / ${totalFiles} (intro failed)`);
+        }
+      }
 
+      // ---------------- 3) Upload lesson resource files (sequential) ----------------
+      const lessonsPayload: any[] = [];
+      for (const l of course.lessons) {
+        let resourceUrlOrKey: string | null = l.resourceUrl ?? null;
+        if (l.resourceFile) {
+          const label = `Lesson: ${l.title || l.id}`;
+          setUploadMessage(`Uploading ${label}...`);
+          try {
+            const key = await uploadFile(l.resourceFile, 10 * 60 * 1000, "videos");
+            resourceUrlOrKey = key ?? null;
+            // mark file done
+            completedFiles = Math.min(totalFiles, completedFiles + 1);
+            setSafeUploadPercent((completedFiles / totalFiles) * 100);
+            setUploadFileList((prev) => prev.map((p) => (p.name === label ? { ...p, percent: 100, status: "done" } : p)));
+            setUploadMessage(`Uploaded ${completedFiles} / ${totalFiles}`);
+          } catch (lessonErr: any) {
+            console.error("lesson upload failed for", l.id, lessonErr);
+            setUploadFileList((prev) => prev.map((p) => (p.name === label ? { ...p, percent: 0, status: "failed" } : p)));
+            resourceUrlOrKey = l.resourceUrl ?? null;
+            completedFiles = Math.min(totalFiles, completedFiles + 1);
+            setSafeUploadPercent((completedFiles / totalFiles) * 100);
+            setUploadMessage(`Uploaded ${completedFiles} / ${totalFiles} (lesson failed)`);
+          }
+        }
+
+        const lessonDurationSeconds = parseDurationToSeconds(l.duration);
+        const parsedPreview: QuizQuestion[] | null = l.__parsedQuizzes ?? (l.quizPreview ? safeParseQuizzes(l.quizPreview) : null);
+
+        let contentToSend: string | null = l.content ?? null;
+
+        if (parsedPreview && parsedPreview.length > 0) {
+          const assigned = assignAppearTimes(parsedPreview, lessonDurationSeconds);
+          try {
+            contentToSend = JSON.stringify({ quizzes: assigned });
+          } catch {
+            contentToSend = l.content ?? null;
+          }
+        } else if (l.quizPreview && !parsedPreview) {
+          contentToSend = l.content ?? l.quizPreview;
+        }
+
+        lessonsPayload.push({
+          id: l.id,
+          title: l.title || null,
+          duration: lessonDurationSeconds,
+          summary: l.summary ?? null,
+          content: contentToSend ?? null,
+          resourceUrl: resourceUrlOrKey ?? null,
+        });
+      }
+
+      // ---------------- 4) Finalize course payload and call API ----------------
+      setUploadMessage("Finalizing course...");
+      const courseDurationSeconds = parseDurationToSeconds(course.duration);
       const payload = {
         title: course.title.trim(),
         subtitle: course.subtitle ?? null,
@@ -590,7 +667,6 @@ const uploadFile = useCallback(
       };
 
       const url = editingMetaId ? `${apiBase}/courses/${encodeURIComponent(editingMetaId)}` : `${apiBase}/courses`;
-      // keep existing behavior: use PUT for editing, POST for creating
       let method = editingMetaId ? "PUT" : "POST";
 
       const attemptFetch = async (m: string) => {
@@ -605,27 +681,30 @@ const uploadFile = useCallback(
       };
 
       let response = await attemptFetch(method);
-
-      // If server returns 405 for PUT, try PATCH as a fallback (minimal change, keeps logic intact)
       if (response.res.status === 405 && editingMetaId && method === "PUT") {
-        console.warn("[CoursesManager] PUT returned 405, retrying with PATCH");
         method = "PATCH";
         response = await attemptFetch(method);
       }
 
       const { res, ct, body } = response;
-
       if (!res.ok) {
         console.error("save failed:", { status: res.status, statusText: res.statusText, contentType: ct, body });
         let errMsg = `Save failed (status ${res.status})`;
         if (body && typeof body === "object" && (body as any).error) errMsg = String((body as any).error);
         else if (typeof body === "string" && body.trim()) errMsg = body;
-        setMessage({ text: errMsg, type: "error" });
-        return;
+        throw new Error(errMsg);
       }
 
+      // success
+      setSafeUploadPercent(100);
+      setUploadMessage("Save complete");
       setMessage({ text: `Course ${editingMetaId ? "updated" : "saved"} successfully.`, type: "success" });
-      setEditorOpen(false);
+
+      // small visual pause so 100% is visible
+      await new Promise((r) => setTimeout(r, 600));
+
+      // reset editor state and close modal
+      setUploadModalOpen(false);
       setEditingMetaId(null);
       setIntroVideoPreview(null);
 
@@ -639,10 +718,13 @@ const uploadFile = useCallback(
         introVideo: null,
         lessons: [],
       });
+
       await refreshCourses();
     } catch (e: any) {
       console.error("Save failed:", e);
       setMessage({ text: e?.message || "Save failed", type: "error" });
+      setUploadMessage(e?.message ?? "Failed");
+      // keep modal open so user sees failure; they can close or cancel
     } finally {
       setSaving(false);
     }
@@ -779,6 +861,21 @@ const uploadFile = useCallback(
   /* ---------------- Render ---------------- */
   return (
     <div className="max-w-7xl mx-auto space-y-8 p-6 bg-slate-50 min-h-screen">
+      {/* Upload progress modal - placed inside render */}
+      <UploadProgressModal
+        open={uploadModalOpen}
+        percent={uploadPercent}
+        autoFill={true}   
+        message={uploadMessage}
+        onClose={() => {
+          // close and clear minimal state
+          setUploadModalOpen(false);
+          setUploadMessage(null);
+          setSafeUploadPercent(0);
+          setUploadFileList([]);
+        }}
+      />
+
       {/* HEADER */}
       <div className="flex items-center justify-between py-4">
         <div className="flex items-center gap-3">
@@ -803,7 +900,7 @@ const uploadFile = useCallback(
                 lessons: [],
               });
               setEditingMetaId(null);
-          
+
               setIntroVideoPreview(null);
               // set preview to default resolved thumbnail
               setThumbnailPreview(resolveMediaUrl(DEFAULT_THUMBNAIL_KEY) ?? "");
