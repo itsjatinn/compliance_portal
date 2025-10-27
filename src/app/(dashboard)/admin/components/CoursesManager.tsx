@@ -465,7 +465,6 @@ export default function CoursesManager({ apiBase = "/api/admin" }: { apiBase?: s
 );
 
 
-
   /* ---------------- Save Course ---------------- */
   const saveCourse = useCallback(async () => {
     if (!course.title.trim()) {

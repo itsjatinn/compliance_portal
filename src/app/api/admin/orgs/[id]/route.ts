@@ -1,6 +1,6 @@
 // app/api/admin/orgs/[id]/route.ts
 import { NextRequest, NextResponse } from "next/server";
-// Adjust this path to match where your prisma client is exported from in your repo.
+import type { Prisma } from "@prisma/client";
 import prisma from "../../../../../lib/prisma";
 
 export const runtime = "nodejs";
@@ -12,71 +12,80 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
   }
 
   try {
-    // Ensure organization exists
-    const org = await prisma.organization.findUnique({ where: { id: orgId } });
+    // 1) ensure organization exists
+    const org = await prisma.organization.findUnique({ where: { id: orgId }, select: { id: true } });
     if (!org) {
       return NextResponse.json({ error: "Organization not found" }, { status: 404 });
     }
 
-    // Prepare a list of deleteMany operations for known models that use orgId.
-    // Order matters if you have foreign keys between these models.
-    // These model names are the Prisma client property names (camelCased).
-    const deletes: Array<Promise<any> | { modelName: string; op: Promise<any> }> = [];
+    // 2) collect user ids that belong to this org (may be empty)
+    const users = await prisma.user.findMany({ where: { orgId }, select: { id: true } });
+    const userIds = users.map(u => u.id);
 
-    // Helper to push deleteMany for a model if the client supports it.
-    const maybePushDeleteMany = (modelName: string, where: any = { orgId }) => {
-      const model = (prisma as any)[modelName];
-      if (model && typeof model.deleteMany === "function") {
-        // push the promise holder so we can run them inside $transaction later
-        deletes.push({ modelName, op: model.deleteMany({ where }) });
-      }
-    };
+    // Prepare ops typed as Prisma.PrismaPromise<any>[]
+    const ops: Prisma.PrismaPromise<any>[] = [];
 
-    // Known models that reference orgId in your schema:
-    maybePushDeleteMany("assignedCourse"); // AssignedCourse
-    maybePushDeleteMany("assignedCourses"); // in case different naming exists
-    maybePushDeleteMany("certificate"); // Certificate
-    maybePushDeleteMany("certificates");
-    maybePushDeleteMany("progress"); // Progress
-    maybePushDeleteMany("progresses");
-    // user rows: we remove users associated with the org (only if your business logic allows hard-delete)
-    maybePushDeleteMany("user"); // User
-    maybePushDeleteMany("users");
+    // AssignedCourse has orgId -> delete by orgId
+    ops.push(prisma.assignedCourse.deleteMany({ where: { orgId } }));
 
-    // If you have other org-scoped models, add them here, e.g.
-    // maybePushDeleteMany("someOtherModel");
+    // Certificates that belong to org
+    ops.push(prisma.certificate.deleteMany({ where: { orgId } }));
 
-    // Execute deletes in a transaction and collect counts.
-    const deleteOps = deletes.map(d => (d as any).op);
-    const results = deleteOps.length > 0 ? await prisma.$transaction(deleteOps) : [];
+    // If there are users, delete user-scoped records first to avoid FK issues:
+    if (userIds.length > 0) {
+      // Progress rows linked to users
+      ops.push(prisma.progress.deleteMany({ where: { userId: { in: userIds } } }));
 
-    // Map results to counts by model name for reporting
-    const deletedByModel: Record<string, number> = {};
-    let totalDeleted = 0;
-    for (let i = 0; i < deletes.length; i++) {
-      const descriptor = deletes[i] as any;
-      const modelName = descriptor.modelName;
-      const res = results[i];
-      const count = typeof res?.count === "number" ? res.count : 0;
-      deletedByModel[modelName] = count;
-      totalDeleted += count;
+      // PasswordResetToken linked to users
+      ops.push(prisma.passwordResetToken.deleteMany({ where: { userId: { in: userIds } } }));
+
+      // add other per-user deletes here if needed
+    } else {
+      // To keep mapping predictable, push "no-op" prisma deleteMany with an impossible filter returning count 0.
+      // This keeps results array positions consistent for later mapping.
+      // We use a Prisma call so its type remains PrismaPromise.
+      ops.push(prisma.progress.deleteMany({ where: { userId: { in: ["__none__"] } } }));
+      ops.push(prisma.passwordResetToken.deleteMany({ where: { userId: { in: ["__none__"] } } }));
     }
 
-    // Finally delete the organization itself. If you already have ON DELETE CASCADE
-    // for certain relations at DB-level, this delete may also have removed dependent rows;
-    // in that case some counts above may be zero — but deleting here is still correct.
+    // Delete users themselves (by orgId)
+    ops.push(prisma.user.deleteMany({ where: { orgId } }));
+
+    // Execute the deletes in a single transaction (child deletes + users)
+    const results = await prisma.$transaction(ops);
+
+    // Build friendly map of counts (match order of ops added)
+    const deletedByModel: Record<string, number> = {};
+    let idx = 0;
+
+    deletedByModel["assignedCourse"] = typeof results[idx]?.count === "number" ? results[idx].count : 0;
+    idx++;
+    deletedByModel["certificate"] = typeof results[idx]?.count === "number" ? results[idx].count : 0;
+    idx++;
+
+    // progress & passwordResetToken entries (either real deletes or no-op deletes)
+    deletedByModel["progress"] = typeof results[idx]?.count === "number" ? results[idx].count : 0;
+    idx++;
+    deletedByModel["passwordResetToken"] = typeof results[idx]?.count === "number" ? results[idx].count : 0;
+    idx++;
+
+    deletedByModel["user"] = typeof results[idx]?.count === "number" ? results[idx].count : 0;
+
+    const totalDeletedBeforeOrg = Object.values(deletedByModel).reduce((s, v) => s + (v ?? 0), 0);
+
+    // 3) finally delete organization
     await prisma.organization.delete({ where: { id: orgId } });
 
     return NextResponse.json({
       success: true,
       orgIdDeleted: orgId,
-      deletedAssignmentsAndRelatedCounts: deletedByModel,
-      totalDeletedRowsBeforeOrgDelete: totalDeleted,
+      deletedCounts: deletedByModel,
+      totalDeletedRowsBeforeOrgDelete: totalDeletedBeforeOrg,
+      note:
+        "Deleted assigned courses and certificates by orgId; deleted user-scoped data (progress, tokens) by userId; then deleted users and finally the organization. Courses are global and were not deleted."
     });
   } catch (err: any) {
-    console.error(`DELETE /api/admin/orgs/${params?.id} error:`, err);
-    // If the DB complains about foreign key constraints it means some relation wasn't removed;
-    // advise running migrations to set ON DELETE CASCADE or add the missing model to the deletion list.
+    console.error(`DELETE /api/admin/orgs/${orgId} error:`, err);
     return NextResponse.json(
       {
         error: "Failed to delete organization",
