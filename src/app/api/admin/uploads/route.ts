@@ -1,69 +1,133 @@
-// usage: const key = await uploadFileWithPresign(file, { folder: "videos" });
-export async function uploadFileWithPresign(
-  file: File,
-  opts?: { folder?: string; timeoutMs?: number }
-): Promise<{ key: string; urlPublic?: string }> {
-  if (!file) throw new Error("file required");
+// src/app/api/admin/uploads/route.ts
+import { NextRequest, NextResponse } from "next/server";
+import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
-  const folder = opts?.folder;
-  const presignRes = await fetch("/api/admin/uploads", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      filename: file.name,
-      contentType: file.type || "application/octet-stream",
-      folder,
-      // expiresInSeconds: 3600
-    }),
-  });
+export const runtime = "nodejs";
 
-  if (!presignRes.ok) {
-    const txt = await presignRes.text().catch(() => "");
-    throw new Error(txt || `Presign failed: ${presignRes.status}`);
+const {
+  R2_ACCOUNT_ID,
+  R2_ACCESS_KEY_ID,
+  R2_SECRET_ACCESS_KEY,
+  R2_BUCKET_NAME,
+  // optional: allow passing allowed origins via env
+  NEXT_PUBLIC_ALLOWED_ORIGINS = "*",
+} = process.env;
+
+if (!R2_ACCOUNT_ID || !R2_ACCESS_KEY_ID || !R2_SECRET_ACCESS_KEY || !R2_BUCKET_NAME) {
+  throw new Error(
+    "Missing Cloudflare R2 env vars. Set R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_BUCKET_NAME"
+  );
+}
+
+const endpoint = `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com`;
+
+/**
+ * S3Client configured to use Cloudflare R2
+ */
+const s3 = new S3Client({
+  region: "auto",
+  endpoint,
+  credentials: {
+    accessKeyId: R2_ACCESS_KEY_ID,
+    secretAccessKey: R2_SECRET_ACCESS_KEY,
+  },
+  forcePathStyle: false,
+});
+
+type Body = {
+  filename: string;
+  contentType?: string;
+  folder?: string; // optional: "videos" or "certificates"
+  expiresInSeconds?: number;
+};
+
+const ALLOWED_FOLDERS = new Set(["videos", "images", "certificates", "documents", "thumbnails"]); // adjust to your needs
+
+// helper to add CORS headers (adjust allowed origins as needed)
+function corsHeaders(origin = "*") {
+  return {
+    "Access-Control-Allow-Origin": origin,
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization",
+    "Access-Control-Max-Age": "3600",
+  };
+}
+
+// OPTIONS handler for preflight
+export function OPTIONS(_: NextRequest) {
+  const headers = corsHeaders(NEXT_PUBLIC_ALLOWED_ORIGINS || "*");
+  return new NextResponse(null, { status: 204, headers });
+}
+
+export async function POST(req: NextRequest) {
+  // add CORS headers to response
+  const origin = req.headers.get("origin") || NEXT_PUBLIC_ALLOWED_ORIGINS || "*";
+
+  // Optional: enforce admin auth here
+  // const user = await requireAdmin(req);
+  // if (!user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
+
+  let body: Body | null = null;
+  try {
+    body = (await req.json()) as Body;
+  } catch (err) {
+    return new NextResponse(JSON.stringify({ error: "invalid json" }), {
+      status: 400,
+      headers: { "Content-Type": "application/json", ...corsHeaders(origin) },
+    });
   }
 
-  const presignJson = await presignRes.json();
-  const { url: signedUrl, key, contentType, expiresIn } = presignJson;
-  if (!signedUrl || !key) throw new Error("invalid presign response");
+  if (!body?.filename) {
+    return new NextResponse(JSON.stringify({ error: "filename required" }), {
+      status: 400,
+      headers: { "Content-Type": "application/json", ...corsHeaders(origin) },
+    });
+  }
 
-  // Upload using XMLHttpRequest to get progress
-  await new Promise<void>((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    xhr.open("PUT", signedUrl, true);
-    // must set same Content-Type as presign (or the one used to sign)
-    xhr.setRequestHeader("Content-Type", contentType || file.type || "application/octet-stream");
+  // sanitize and validate folder
+  let folder = "";
+  if (body.folder) {
+    const cleaned = body.folder.replace(/(^\/|\/$)/g, "");
+    if (!ALLOWED_FOLDERS.has(cleaned)) {
+      return new NextResponse(JSON.stringify({ error: "invalid folder" }), {
+        status: 400,
+        headers: { "Content-Type": "application/json", ...corsHeaders(origin) },
+      });
+    }
+    folder = `${cleaned}/`;
+  }
 
-    // Optional - set credentials if your presigned url expects no credentials
-    xhr.withCredentials = false;
+  // safe filename
+  const safeName = body.filename.replace(/[^a-zA-Z0-9._-]/g, "_");
+  const uniqueSuffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const key = `${folder}${uniqueSuffix}-${safeName}`;
 
-    xhr.upload.onprogress = (ev) => {
-      if (ev.lengthComputable) {
-        const pct = Math.round((ev.loaded / ev.total) * 100);
-        // you can dispatch this progress to your UI
-        console.debug("upload progress", pct);
-      }
-    };
+  const contentType = body.contentType || "application/octet-stream";
 
-    xhr.onload = function () {
-      // 200 and 201 are both common success responses
-      if (xhr.status >= 200 && xhr.status < 300) {
-        resolve();
-      } else {
-        reject(new Error(`PUT to signed url failed: ${xhr.status} - ${xhr.statusText} - ${xhr.responseText}`));
-      }
-    };
-    xhr.onerror = function () {
-      reject(new Error("Network error during PUT to signed url"));
-    };
-    xhr.onabort = function () {
-      reject(new Error("Upload aborted"));
-    };
+  const putParams = {
+    Bucket: R2_BUCKET_NAME,
+    Key: key,
+    ContentType: contentType,
+  };
 
-    xhr.send(file);
-  });
+  try {
+    const command = new PutObjectCommand(putParams);
+    // clamp expiry: at least 60s, default 1hr, max 24h
+    const expiresIn = Math.max(60, Math.min(body.expiresInSeconds ?? 3600, 60 * 60 * 24));
+    const signedUrl = await getSignedUrl(s3, command, { expiresIn });
 
-  // Optionally return the public URL if you build it from account/bucket
-  // e.g. https://<accountid>.r2.cloudflarestorage.com/<bucket>/<key>
-  const publicUrl = `https://${process.env.NEXT_PUBLIC_R2_ACCOUNT_ID || ""}.r2.cloudflarestorage.com/${encodeURIComponent(key)}`; // may not be accurate if you host behind CDN
-  return { key, urlPublic: publicUrl };
+    const payload = { url: signedUrl, key, contentType, expiresIn };
+
+    return new NextResponse(JSON.stringify(payload), {
+      status: 200,
+      headers: { "Content-Type": "application/json", ...corsHeaders(origin) },
+    });
+  } catch (err) {
+    console.error("R2 presign error:", err);
+    return new NextResponse(JSON.stringify({ error: "failed to generate upload url" }), {
+      status: 500,
+      headers: { "Content-Type": "application/json", ...corsHeaders(origin) },
+    });
+  }
 }
