@@ -33,7 +33,16 @@ type Assignment = {
 const ASSIGN_API = "/api/employee/assigned";
 const COURSE_API = "/api/admin/courses";
 const COMPLETIONS_API = "/api/completions";
-const DEFAULT_THUMBNAIL = "/5994373.jpg"; // put image in /public
+
+// R2 public base (must be set as NEXT_PUBLIC_R2_PUBLIC_URL in env)
+// e.g. NEXT_PUBLIC_R2_PUBLIC_URL="https://pub-xxxxx.r2.dev"
+const R2_PUBLIC = (process.env.NEXT_PUBLIC_R2_PUBLIC_URL || "").replace(/\/+$/, "");
+
+/**
+ * If no thumbnail was uploaded at create time we want to use the R2-hosted default:
+ * path: thumbnails/5994373.jpg (you said thumbnails/5994373.jpg is your default)
+ */
+const R2_DEFAULT_THUMB_KEY = "thumbnails/5994373.jpg";
 
 /* -------------------- Helpers -------------------- */
 const toText = (v: any): string => {
@@ -66,6 +75,51 @@ function setStoredProgress(courseId: string, data: { completedItemIds: string[] 
   }
 }
 
+/**
+ * Resolve a media value (could be a full URL, could be an R2 key like "thumbnails/abc.jpg",
+ * or could be null). Returns a public URL string.
+ *
+ * Rules:
+ * - If value is falsy => return R2 public default thumbnail URL
+ * - If value starts with http(s) => return as-is
+ * - Else treat value as an R2 key and join with NEXT_PUBLIC_R2_PUBLIC_URL
+ */
+function resolveR2Url(value?: string | null) {
+  // prefer explicit full URLs
+  if (value && typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      // fallback to default
+      return buildR2PublicUrl(R2_DEFAULT_THUMB_KEY);
+    }
+    const lower = trimmed.toLowerCase();
+    if (lower.startsWith("http://") || lower.startsWith("https://")) {
+      return trimmed;
+    }
+    // If it's already an absolute path from /public (starts with "/"), we keep it as-is
+    // (useful during dev when public assets are served from /)
+    if (trimmed.startsWith("/")) {
+      return trimmed;
+    }
+    // Otherwise, treat as R2 key
+    return buildR2PublicUrl(trimmed);
+  }
+  // fallback default thumbnail hosted in R2
+  return buildR2PublicUrl(R2_DEFAULT_THUMB_KEY);
+}
+
+function buildR2PublicUrl(key: string) {
+  // if R2 public URL is not configured, fall back to root-relative public path
+  // (this allows dev to still show something if you placed file in /public)
+  if (!R2_PUBLIC) {
+    // try root public path fallback (user said they put image in /public)
+    return `/${key.split("/").pop()}`; // return "/5994373.jpg"
+  }
+  // ensure no duplicate slashes
+  const cleanedKey = key.replace(/^\/+/, "");
+  return `${R2_PUBLIC}/${encodeURI(cleanedKey)}`;
+}
+
 /* Non-skippable video player component */
 function NonSkippableVideoPlayer({
   src,
@@ -76,10 +130,10 @@ function NonSkippableVideoPlayer({
   onEnded: () => void;
   uniqueId?: string;
 }) {
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  const lastTimeRef = useRef(0);
+  const videoRef = React.useRef<HTMLVideoElement | null>(null);
+  const lastTimeRef = React.useRef(0);
 
-  useEffect(() => {
+  React.useEffect(() => {
     const v = videoRef.current;
     if (!v) return;
 
@@ -88,7 +142,6 @@ function NonSkippableVideoPlayer({
 
     const onSeeking = () => {
       if (!v) return;
-      // prevent seeking by forcing back to last known time
       try {
         if (Math.abs(v.currentTime - lastTimeRef.current) > 0.2) v.currentTime = lastTimeRef.current;
       } catch {}
@@ -97,7 +150,7 @@ function NonSkippableVideoPlayer({
       if (!v) return;
       lastTimeRef.current = v.currentTime;
     };
-    const onEnded = () => {
+    const endedHandler = () => {
       try {
         onEnded();
       } catch (e) {}
@@ -105,17 +158,17 @@ function NonSkippableVideoPlayer({
 
     v.addEventListener("seeking", onSeeking);
     v.addEventListener("timeupdate", onTimeUpdate);
-    v.addEventListener("ended", onEnded);
+    v.addEventListener("ended", endedHandler);
 
     return () => {
       v.removeEventListener("contextmenu", ctx);
       v.removeEventListener("seeking", onSeeking);
       v.removeEventListener("timeupdate", onTimeUpdate);
-      v.removeEventListener("ended", onEnded);
+      v.removeEventListener("ended", endedHandler);
     };
   }, [src, onEnded]);
 
-  const [playing, setPlaying] = useState(false);
+  const [playing, setPlaying] = React.useState(false);
   const togglePlay = () => {
     const v = videoRef.current;
     if (!v) return;
@@ -154,7 +207,7 @@ function makeFallbackCourse(id: string): Course {
   return {
     id,
     title: id,
-    thumbnail: DEFAULT_THUMBNAIL,
+    thumbnail: resolveR2Url(null),
     sections: [],
     quizzes: [],
     lessons: 0,
@@ -222,9 +275,15 @@ export default function AssignedCoursesGrid() {
           if (!c?.id) return;
           const lessonsCount = toCount((c as any).lessons);
           const quizzesCount = toCount((c as any).quizzes);
+
+          // Resolve thumbnail and introVideo via R2 resolver
+          const resolvedThumb = resolveR2Url((c as any).thumbnail || (c as any).image || null);
+          const resolvedIntro = resolveR2Url((c as any).introVideo || (c as any).intro || null);
+
           map[c.id] = {
             ...c,
-            thumbnail: c.thumbnail || (c as any).image || DEFAULT_THUMBNAIL,
+            thumbnail: resolvedThumb,
+            introVideo: resolvedIntro,
             lessons: lessonsCount,
             quizzes: quizzesCount,
           };
@@ -254,9 +313,12 @@ export default function AssignedCoursesGrid() {
         arr.forEach((a: Assignment) => {
           const c = a.course;
           if (c?.id) {
+            const resolvedThumb = resolveR2Url((c as any).thumbnail || (c as any).image || null);
+            const resolvedIntro = resolveR2Url((c as any).introVideo || (c as any).intro || null);
             embeddedMap[c.id] = {
               ...c,
-              thumbnail: (c as any).thumbnail || (c as any).image || DEFAULT_THUMBNAIL,
+              thumbnail: resolvedThumb,
+              introVideo: resolvedIntro,
               lessons: toCount((c as any).lessons),
               quizzes: toCount((c as any).quizzes),
             };
@@ -338,9 +400,6 @@ export default function AssignedCoursesGrid() {
             const raw = await res.json().catch(() => ({}));
             const payload = raw?.progress ?? raw;
 
-            // debug: uncomment to inspect shape in browser console
-            // console.debug("[progress payload]", courseId, payload);
-
             // prefer explicit numeric progress (0-100)
             if (typeof payload?.progress === "number" && isFinite(payload.progress)) {
               map[courseId] = Math.max(0, Math.min(100, Math.round(payload.progress)));
@@ -389,11 +448,13 @@ export default function AssignedCoursesGrid() {
   }
 
   function openPreview(courseId: string, lessonId?: string, videoUrl?: string) {
-    const url = videoUrl || (coursesById[courseId]?.introVideo ?? DEFAULT_THUMBNAIL);
+    // resolve video url via R2 helper (if server returned R2 key)
+    const url = resolveR2Url(videoUrl || coursesById[courseId]?.introVideo || null);
     setPreview({ url, courseId, lessonId });
   }
   function onPreviewEnded(courseId: string, lessonId?: string) {
-    markItemComplete(courseId, lessonId ?? "intro");
+    // Preview playback should NOT update progress — keep preview purely for previewing.
+    // Do NOT call markItemComplete here.
     setPreview(null);
   }
 
@@ -435,7 +496,7 @@ export default function AssignedCoursesGrid() {
             >
               <div className="relative">
                 <img
-                  src={course.thumbnail || DEFAULT_THUMBNAIL}
+                  src={resolveR2Url(course.thumbnail || null)}
                   alt={toText(course.title)}
                   className="w-full h-44 object-cover transition-transform duration-500 group-hover:scale-105"
                 />
@@ -486,8 +547,6 @@ export default function AssignedCoursesGrid() {
                     Preview
                   </button>
                 </div>
-
-                
               </div>
             </div>
           );

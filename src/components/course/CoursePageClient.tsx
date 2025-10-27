@@ -7,6 +7,29 @@ import { Play, Pause, Maximize, Minimize, CheckCircle } from "lucide-react";
 import QuizModal from "./QuizModal";
 import LessonReportModal from "./LessonReportModal";
 
+/* ------------------ R2 CONFIG ------------------ */
+// Use the same R2 logic as in AssignedCoursesGrid.tsx
+const R2_PUBLIC = (process.env.NEXT_PUBLIC_R2_PUBLIC_URL || "").replace(/\/+$/, "");
+const R2_DEFAULT_THUMB_KEY = "thumbnails/5994373.jpg";
+
+// Helper: Build R2 public URL safely
+function buildR2PublicUrl(key: string) {
+  if (!R2_PUBLIC) return `/${key.split("/").pop()}`;
+  const cleanedKey = key.replace(/^\/+/, "");
+  return `${R2_PUBLIC}/${encodeURI(cleanedKey)}`;
+}
+
+// Helper: Resolve R2 URL for videos or images
+function resolveR2Url(value?: string | null) {
+  if (!value) return buildR2PublicUrl(R2_DEFAULT_THUMB_KEY);
+  const trimmed = String(value).trim();
+  if (!trimmed) return buildR2PublicUrl(R2_DEFAULT_THUMB_KEY);
+  const lower = trimmed.toLowerCase();
+  if (lower.startsWith("http://") || lower.startsWith("https://")) return trimmed;
+  if (trimmed.startsWith("/")) return trimmed;
+  return buildR2PublicUrl(trimmed);
+}
+
 /* ------------------ Helpers ------------------ */
 
 function parseTimeToSeconds(input: any): number | null {
@@ -403,7 +426,8 @@ export default function CoursePageClient({ courseId }: { courseId: string }) {
                 );
                 const title = l.title ?? l.name ?? l.heading ?? `Lesson ${idx + 1}`;
                 const duration = l.duration ?? l.length ?? l.seconds ?? "";
-                const videoUrl = l.videoUrl ?? l.resourceUrl ?? l.url ?? l.src ?? null;
+                const rawVideoUrl = l.videoUrl ?? l.resourceUrl ?? l.url ?? l.src ?? null;
+                const videoUrl = rawVideoUrl ? resolveR2Url(rawVideoUrl) : null;
 
                 if (l.lesson && typeof l.lesson === "object") {
                   try {
@@ -411,7 +435,14 @@ export default function CoursePageClient({ courseId }: { courseId: string }) {
                   } catch {}
                 }
 
-                return { id, title, duration, videoUrl, resourceUrl: l.resourceUrl ?? null, lesson: l } as Section;
+                return {
+                  id,
+                  title,
+                  duration,
+                  videoUrl,
+                  resourceUrl: l.resourceUrl ? resolveR2Url(l.resourceUrl) : null,
+                  lesson: l,
+                } as Section;
               })
             : []) ?? [];
 
@@ -722,9 +753,9 @@ export default function CoursePageClient({ courseId }: { courseId: string }) {
   /* ---------- Play helpers ---------- */
   const chooseInitialVideoSrc = useCallback(() => {
     if (!course) return null;
-    if (course.introVideo) return course.introVideo;
+    if (course.introVideo) return resolveR2Url(course.introVideo);
     const firstWithVideo = course.sections?.find((s) => s.videoUrl || s.resourceUrl);
-    return firstWithVideo?.videoUrl ?? firstWithVideo?.resourceUrl ?? null;
+    return firstWithVideo?.videoUrl ? resolveR2Url(firstWithVideo.videoUrl) : firstWithVideo?.resourceUrl ? resolveR2Url(firstWithVideo.resourceUrl) : null;
   }, [course]);
 
   const playVideoSrc = useCallback(async (src?: string | null) => {
@@ -734,8 +765,9 @@ export default function CoursePageClient({ courseId }: { courseId: string }) {
       console.warn("No video src available to play");
       return;
     }
-    if (v.src !== src) {
-      v.src = src;
+    const resolved = resolveR2Url(src);
+    if (v.src !== resolved) {
+      v.src = resolved;
       v.load();
     }
     try {
@@ -774,8 +806,9 @@ export default function CoursePageClient({ courseId }: { courseId: string }) {
     const src = chooseInitialVideoSrc();
     const v = videoRef.current;
     if (v && src) {
-      if (v.src !== src) {
-        v.src = src;
+      const resolved = resolveR2Url(src);
+      if (v.src !== resolved) {
+        v.src = resolved;
         v.load();
       }
     }
@@ -1231,7 +1264,8 @@ export default function CoursePageClient({ courseId }: { courseId: string }) {
                           <div className="flex items-center gap-3">
                             <button
                               onClick={() => {
-                                const src = s.videoUrl ?? s.resourceUrl ?? null;
+                                const srcRaw = s.videoUrl ?? s.resourceUrl ?? null;
+                                const src = srcRaw ? resolveR2Url(srcRaw) : null;
                                 if (!src) {
                                   alert("No video available for this lesson.");
                                   return;
@@ -1282,7 +1316,14 @@ export default function CoursePageClient({ courseId }: { courseId: string }) {
                 isFullscreen ? "!fixed !inset-0 !z-[9999] !rounded-none" : ""
               }`}
             >
-              <video ref={videoRef} className={`${isFullscreen ? "object-contain" : "object-cover"} w-full h-full`} playsInline preload="metadata" onContextMenu={(e) => e.preventDefault()} controls={false} />
+              <video
+                ref={videoRef}
+                className={`${isFullscreen ? "object-contain" : "object-cover"} w-full h-full`}
+                playsInline
+                preload="metadata"
+                onContextMenu={(e) => e.preventDefault()}
+                controls={false}
+              />
               <div className="absolute bottom-0 left-0 right-0 flex justify-between items-center px-6 py-4 bg-gradient-to-t from-black/80 via-black/40 to-transparent">
                 <div className="flex items-center gap-3">
                   <button onClick={togglePlay} className="p-3 rounded-full bg-white/10 hover:bg-white/20 transition" aria-label={playing ? "Pause" : "Play"}>

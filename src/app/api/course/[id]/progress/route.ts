@@ -1,12 +1,23 @@
 import { NextResponse } from "next/server";
 import prisma from "../../../../../lib/prisma";
 import jwt from "jsonwebtoken";
-import { promises as fs } from "fs";
-import path from "path";
+import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 
-const CERT_DIR = path.join(process.cwd(), "public", "certificates");
+/* -------------------- R2 CONFIG -------------------- */
+const R2 = new S3Client({
+  region: "auto",
+  endpoint:
+    process.env.R2_ENDPOINT ||
+    `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+  credentials: {
+    accessKeyId: process.env.R2_ACCESS_KEY_ID!,
+    secretAccessKey: process.env.R2_SECRET_ACCESS_KEY!,
+  },
+});
+const R2_BUCKET = process.env.R2_BUCKET_NAME!;
+const R2_PUBLIC = process.env.NEXT_PUBLIC_R2_PUBLIC_URL;
 
-/* -------------------- Helper: Extract user id -------------------- */
+/* -------------------- USER ID EXTRACTION -------------------- */
 async function getUserIdFromReq(req: Request): Promise<string | null> {
   try {
     const header = req.headers.get("x-user-id");
@@ -17,12 +28,8 @@ async function getUserIdFromReq(req: Request): Promise<string | null> {
       const token = auth.slice("bearer ".length).trim();
       const secret = process.env.JWT_SECRET;
       if (secret && token) {
-        try {
-          const decoded: any = jwt.verify(token, secret);
-          return decoded?.sub ?? decoded?.userId ?? decoded?.id ?? null;
-        } catch {
-          console.warn("JWT verify failed (auth header)");
-        }
+        const decoded: any = jwt.verify(token, secret);
+        return decoded?.sub ?? decoded?.userId ?? decoded?.id ?? null;
       }
     }
 
@@ -30,169 +37,170 @@ async function getUserIdFromReq(req: Request): Promise<string | null> {
     if (cookieHeader) {
       const cookies = Object.fromEntries(
         cookieHeader.split(";").map((c) => {
-          const idx = c.indexOf("=");
-          if (idx === -1) return [c.trim(), ""];
-          const key = c.slice(0, idx).trim();
-          const val = decodeURIComponent(c.slice(idx + 1).trim());
-          return [key, val];
+          const i = c.indexOf("=");
+          return [
+            c.slice(0, i).trim(),
+            decodeURIComponent(c.slice(i + 1).trim()),
+          ];
         })
       );
       const token = cookies["token"] ?? cookies["auth_token"];
       if (token && process.env.JWT_SECRET) {
-        try {
-          const decoded: any = jwt.verify(token, process.env.JWT_SECRET);
-          return decoded?.sub ?? decoded?.userId ?? decoded?.id ?? null;
-        } catch {
-          console.warn("JWT verify failed (cookie)");
-        }
+        const decoded: any = jwt.verify(token, process.env.JWT_SECRET);
+        return decoded?.sub ?? decoded?.userId ?? decoded?.id ?? null;
       }
     }
 
     const url = new URL(req.url);
-    const q = url.searchParams.get("asUserId");
-    if (q) return q;
-
-    return null;
-  } catch (err) {
-    console.error("getUserIdFromReq error", err);
+    return url.searchParams.get("asUserId");
+  } catch {
     return null;
   }
 }
 
-/* -------------------- GET progress -------------------- */
-export async function GET(req: Request, { params }: { params: any }) {
-  try {
-    const courseId = await params?.id;
-    if (!courseId)
-      return NextResponse.json({ error: "Missing course id" }, { status: 400 });
-
-    const userId = await getUserIdFromReq(req);
-    if (!userId)
-      return NextResponse.json(
-        { error: "Unauthorized - no user found" },
-        { status: 401 }
-      );
-
-    const progress = await prisma.progress.findFirst({
-      where: { userId, courseId },
-    });
-
-    return NextResponse.json({ progress: progress ?? null }, { status: 200 });
-  } catch (err: any) {
-    console.error("GET /progress error:", err);
-    return NextResponse.json(
-      { error: "Internal server error", details: String(err?.message ?? err) },
-      { status: 500 }
-    );
-  }
+/* -------------------- R2 UPLOAD HELPER -------------------- */
+async function uploadCertificateToR2({
+  userId,
+  courseId,
+  svg,
+  certId,
+}: {
+  userId: string;
+  courseId: string;
+  svg: string;
+  certId: string;
+}) {
+  const key = `certificates/${userId}/${courseId}_${certId}.svg`;
+  const cmd = new PutObjectCommand({
+    Bucket: R2_BUCKET,
+    Key: key,
+    Body: svg,
+    ContentType: "image/svg+xml",
+  });
+  await R2.send(cmd);
+  return `${R2_PUBLIC}/${key}`;
 }
 
-/* -------------------- PUT progress + Auto Certificate -------------------- */
-export async function PUT(req: Request, { params }: { params: any }) {
-  try {
-    const courseId = await params?.id;
-    if (!courseId)
-      return NextResponse.json({ error: "Missing course id" }, { status: 400 });
+/* -------------------- GET PROGRESS -------------------- */
+export async function GET(
+  req: Request,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const { id: courseId } = await params;
+  if (!courseId)
+    return NextResponse.json({ error: "Missing course id" }, { status: 400 });
 
-    const userId = await getUserIdFromReq(req);
-    if (!userId)
-      return NextResponse.json(
-        { error: "Unauthorized - no user found" },
-        { status: 401 }
-      );
+  const userId = await getUserIdFromReq(req);
+  if (!userId)
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-    const body = await req.json().catch(() => ({}));
-    const {
-      watchedSections = {},
-      quizPassed = {},
-      quizReports = {},
-      progress = 0,
-    } = body;
+  const progress = await prisma.progress.findFirst({
+    where: { userId, courseId },
+  });
+  return NextResponse.json({ progress }, { status: 200 });
+}
 
-    // Upsert progress record
-    const record = await prisma.progress.upsert({
-      where: { userId_courseId: { userId, courseId } },
-      update: { watchedSections, quizPassed, quizReports, progress },
-      create: { userId, courseId, watchedSections, quizPassed, quizReports, progress },
-    });
+/* -------------------- PUT PROGRESS + CERT GENERATION -------------------- */
+export async function PUT(
+  req: Request,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const { id: courseId } = await params;
+  if (!courseId)
+    return NextResponse.json({ error: "Missing course id" }, { status: 400 });
 
-    /* -------------------- Auto Certificate Generation -------------------- */
-    if (progress >= 100) {
-      try {
-        // check if certificate already exists
-        const existingCert = await prisma.certificate.findFirst({
-          where: { userId, courseId },
-        });
+  const userId = await getUserIdFromReq(req);
+  if (!userId)
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-        if (!existingCert) {
-          const course = await prisma.course.findUnique({
+  const body = await req.json().catch(() => ({}));
+  const { watchedSections = {}, quizPassed = {}, quizReports = {}, progress = 0 } =
+    body;
+
+  // Upsert progress
+  const record = await prisma.progress.upsert({
+    where: { userId_courseId: { userId, courseId } },
+    update: { watchedSections, quizPassed, quizReports, progress },
+    create: { userId, courseId, watchedSections, quizPassed, quizReports, progress },
+  });
+
+  /* ---- AUTO-CERTIFICATE WHEN COURSE COMPLETED ---- */
+  const normalizedProgress = Math.round(progress);
+  console.log("✅ PUT /progress for", { userId, courseId, normalizedProgress });
+
+  if (normalizedProgress >= 100) {
+    console.log("🎯 100% progress reached, attempting certificate creation...");
+
+    try {
+      const existing = await prisma.certificate.findFirst({
+        where: { userId, courseId },
+      });
+
+      if (!existing) {
+        const [course, learner, assignment] = await Promise.all([
+          prisma.course.findUnique({
             where: { id: courseId },
             select: { title: true },
-          });
-
-          const learner = await prisma.user.findUnique({
+          }),
+          prisma.user.findUnique({
             where: { id: userId },
             select: { name: true },
-          });
-
-          // try to infer orgId from AssignedCourse (if exists)
-          const assignment = await prisma.assignedCourse.findFirst({
+          }),
+          prisma.assignedCourse.findFirst({
             where: { userId, courseId },
             select: { orgId: true },
-          });
+          }),
+        ]);
 
-          const orgId = assignment?.orgId ?? null;
+        const certId = `cert_${Math.random().toString(36).slice(2, 9)}`;
+        const orgId = assignment?.orgId ?? null;
+        const issuedAt = new Date();
+        const svg = buildCertificateSVG({
+          learnerName: learner?.name ?? "Learner",
+          courseTitle: course?.title ?? "Course",
+          issuedAt,
+          certId,
+          issuerName: "Compliance Academy",
+        });
 
-          if (course) {
-            await fs.mkdir(CERT_DIR, { recursive: true });
+        console.log("📦 Uploading certificate to R2...");
+        const publicUrl = await uploadCertificateToR2({
+          userId,
+          courseId,
+          svg,
+          certId,
+        });
 
-            const certId = `cert_${Math.random().toString(36).slice(2, 9)}`;
-            const fileName = `${courseId}_${userId}_${certId}.svg`;
-            const publicPath = `/certificates/${fileName}`;
-            const destPath = path.join(CERT_DIR, fileName);
-            const issuedAt = new Date();
+        await prisma.certificate.create({
+          data: {
+            id: certId,
+            userId,
+            courseId,
+            orgId,
+            filePath: publicUrl,
+            issuedAt,
+          },
+        });
 
-            const svg = buildCertificateSVG({
-              learnerName: learner?.name ?? "Learner",
-              courseTitle: course.title ?? "Course",
-              issuedAt,
-              certId,
-              issuerName: "Compliance Academy",
-            });
-
-            await fs.writeFile(destPath, svg, "utf8");
-
-            await prisma.certificate.create({
-              data: {
-                id: certId,
-                userId,
-                courseId,
-                orgId,
-                filePath: publicPath,
-                issuedAt,
-              },
-            });
-
-            console.log(`✅ Auto certificate created for user ${userId}`);
-          }
-        }
-      } catch (e) {
-        console.error("Auto certificate creation failed:", e);
+        console.log(`✅ Certificate uploaded to R2: ${publicUrl}`);
       }
+    } catch (err) {
+      console.error("❌ Certificate generation failed:", err);
     }
-    /* -------------------------------------------------------------------- */
-
-    return NextResponse.json({ success: true, progress: record }, { status: 200 });
-  } catch (err: any) {
-    console.error("PUT /progress error:", err);
-    return NextResponse.json(
-      { error: "Internal server error", details: String(err?.message ?? err) },
-      { status: 500 }
-    );
   }
+
+  return NextResponse.json({ success: true, progress: record }, { status: 200 });
 }
 
-/* -------------------- SVG Generator -------------------- */
+/* -------------------- SVG BUILDER (ornate certificate layout) -------------------- */
+function escapeXml(str: string) {
+  return String(str ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
 function buildCertificateSVG({
   courseTitle,
   learnerName,
@@ -212,40 +220,115 @@ function buildCertificateSVG({
     day: "numeric",
   });
 
+  // Colors and small tweaks — adjust if you want different palette
+  const bg = "#fbfdf9";
+  const accent = "#9aa88a"; // greenish accent
+  const text = "#0f172a";
+  const muted = "#475569";
+
+  const nameEsc = escapeXml(learnerName);
+  const courseEsc = escapeXml(courseTitle);
+  const dateEsc = escapeXml(dateStr);
+  const idEsc = escapeXml(certId);
+  const issuerEsc = escapeXml(issuerName);
+
   return `<?xml version="1.0" encoding="UTF-8"?>
-  <svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000">
-    <rect width="100%" height="100%" fill="#f9fafb" rx="20"/>
-    <text x="50%" y="200" font-size="48" font-family="sans-serif" font-weight="700" text-anchor="middle" fill="#1e293b">
-      Certificate of Completion
+  <svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000" role="img" aria-label="Certificate">
+    <defs>
+      <pattern id="wave" width="80" height="80" patternUnits="userSpaceOnUse">
+        <path d="M0 40 Q20 0 40 40 T80 40" fill="none" stroke="${accent}" stroke-opacity="0.06" stroke-width="2"/>
+      </pattern>
+
+      <g id="cornerOrn">
+        <path d="M0 0 C30 10 30 40 0 60" stroke="${accent}" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+      </g>
+
+      <radialGradient id="sealGrad" cx="50%" cy="50%" r="50%">
+        <stop offset="0%" stop-color="#ffffff" stop-opacity="0.15"/>
+        <stop offset="100%" stop-color="${accent}" stop-opacity="0.12"/>
+      </radialGradient>
+    </defs>
+
+    <!-- background -->
+    <rect width="100%" height="100%" fill="${bg}" />
+    <rect width="100%" height="100%" fill="url(#wave)" opacity="0.65" />
+
+    <!-- ornate outer borders -->
+    <g transform="translate(18,18)">
+      <rect x="12" y="12" width="1576" height="976" rx="22" ry="22" fill="none" stroke="${accent}" stroke-width="6" />
+      <rect x="36" y="36" width="1528" height="928" rx="14" ry="14" fill="none" stroke="${accent}" stroke-width="2" />
+      <use href="#cornerOrn" x="40" y="40" />
+      <use href="#cornerOrn" x="1520" y="40" transform="scale(-1,1) translate(-1600,0)" />
+      <use href="#cornerOrn" x="40" y="920" transform="scale(1,-1) translate(0,-1000)" />
+      <use href="#cornerOrn" x="1520" y="920" transform="scale(-1,-1) translate(-1600,-1000)" />
+    </g>
+
+    <!-- heading -->
+    <text x="50%" y="150" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-size="56" font-weight="700" fill="${text}">
+      CERTIFICATE
     </text>
-    <text x="50%" y="350" font-size="28" font-family="serif" text-anchor="middle" fill="#334155">
-      This certifies that
+    <text x="50%" y="190" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-size="20" fill="${muted}" letter-spacing="2">
+      OF APPRECIATION
     </text>
-    <text x="50%" y="420" font-size="42" font-weight="700" text-anchor="middle" fill="#111827">
-      ${escapeXml(learnerName)}
+
+    <!-- subheading -->
+    <text x="50%" y="250" text-anchor="middle" font-family="serif" font-size="14" fill="${muted}" opacity="0.9">
+      THIS CERTIFICATE IS PROUDLY PRESENTED TO
     </text>
-    <text x="50%" y="520" font-size="28" font-family="serif" text-anchor="middle" fill="#334155">
+
+    <!-- recipient name -->
+    <rect x="160" y="300" width="1280" height="110" rx="8" fill="#ffffff" fill-opacity="0.65"/>
+    <text x="50%" y="375" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-size="64" font-weight="700" fill="#123024">
+      ${nameEsc}
+    </text>
+
+    <!-- course line -->
+    <text x="50%" y="445" text-anchor="middle" font-family="serif" font-size="18" fill="${muted}">
       has successfully completed the course
     </text>
-    <text x="50%" y="580" font-size="36" font-weight="700" text-anchor="middle" fill="#0f172a">
-      ${escapeXml(courseTitle)}
+
+    <text x="50%" y="495" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-size="34" font-weight="700" fill="${text}">
+      ${courseEsc}
     </text>
-    <text x="50%" y="670" font-size="18" text-anchor="middle" fill="#475569">
-      Awarded on ${escapeXml(dateStr)}
+
+    <!-- optional description paragraph -->
+    <foreignObject x="180" y="520" width="1240" height="70">
+      <div xmlns="http://www.w3.org/1999/xhtml" style="font-family:Arial, Helvetica, sans-serif; font-size:14px; color:${muted}; text-align:center; line-height:1.2;">
+        ${escapeXml("Lorem ipsum dolor sit amet, consectetur adipiscing elit. This certificate recognizes the learner's achievement.")}
+      </div>
+    </foreignObject>
+
+    <!-- signatures -->
+    <g transform="translate(160,650)">
+      <line x1="0" y1="40" x2="300" y2="40" stroke="${muted}" stroke-width="1.4" />
+      <text x="150" y="70" text-anchor="middle" font-family="serif" font-size="14" fill="${text}" font-weight="600">Charles Blake</text>
+      <text x="150" y="90" text-anchor="middle" font-family="sans-serif" font-size="12" fill="${muted}">President Director</text>
+    </g>
+
+    <!-- center seal -->
+    <g transform="translate(740,620)">
+      <circle cx="80" cy="40" r="60" fill="url(#sealGrad)" stroke="${accent}" stroke-width="3" />
+      <circle cx="80" cy="40" r="42" fill="${bg}" stroke="${accent}" stroke-width="2" />
+      <text x="80" y="45" text-anchor="middle" font-family="Georgia, serif" font-size="32" font-weight="700" fill="${accent}">C</text>
+    </g>
+
+    <g transform="translate(1080,650)">
+      <line x1="0" y1="40" x2="300" y2="40" stroke="${muted}" stroke-width="1.4" />
+      <text x="150" y="70" text-anchor="middle" font-family="serif" font-size="14" fill="${text}" font-weight="600">Julie S. Smith</text>
+      <text x="150" y="90" text-anchor="middle" font-family="sans-serif" font-size="12" fill="${muted}">General Manager</text>
+    </g>
+
+    <!-- issued date & id -->
+    <text x="320" y="860" font-family="sans-serif" font-size="14" fill="${muted}">
+      Awarded on ${dateEsc}
     </text>
-    <text x="50%" y="720" font-size="14" text-anchor="middle" fill="#64748b">
-      Certificate ID: ${escapeXml(certId)}
+    <text x="1280" y="860" text-anchor="end" font-family="monospace" font-size="13" fill="${muted}">
+      Certificate ID: ${idEsc}
     </text>
-    <text x="50%" y="800" font-size="16" text-anchor="middle" fill="#1e293b">
-      Issued by ${escapeXml(issuerName)}
+
+    <!-- issuer line -->
+    <text x="50%" y="920" text-anchor="middle" font-family="sans-serif" font-size="14" fill="${muted}">
+      Issued by ${issuerEsc}
     </text>
   </svg>`;
-}
-
-function escapeXml(str: string) {
-  return str
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
 }
