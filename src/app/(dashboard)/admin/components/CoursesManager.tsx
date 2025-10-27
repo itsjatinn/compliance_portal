@@ -56,7 +56,7 @@ type CourseMeta = {
   [k: string]: any;
 };
 
-const DEFAULT_THUMBNAIL = "/images/compliance_default_thumb.jpg";
+
 
 function uid(prefix = "c") {
   return `${prefix}_${Math.random().toString(36).slice(2, 10)}`;
@@ -263,6 +263,35 @@ function normalizeLessonForEditor(secOrLesson: any): DraftLesson {
   };
 }
 
+/* ---------------- NEW: default thumbnail key and R2 resolver ---------------- */
+
+/**
+ * Your default thumbnail key on R2 (used when creating courses and no thumbnail uploaded)
+ */
+const DEFAULT_THUMBNAIL_KEY = "thumbnails/5994373.jpg";
+
+/**
+ * Convert a key (e.g. "thumbnails/5994373.jpg") or absolute URL into a browser-usable URL.
+ * Requires NEXT_PUBLIC_R2_PUBLIC_URL to be set in env (e.g. https://pub-xxxxx.r2.dev)
+ * If the input is already an absolute URL, returns it unchanged.
+ */
+function resolveMediaUrl(keyOrUrl?: string | null): string | null {
+  if (!keyOrUrl) return null;
+  const s = String(keyOrUrl).trim();
+  if (!s) return null;
+  if (/^https?:\/\//i.test(s)) return s;
+  if (/^data:|^blob:/i.test(s)) return s;
+
+  const base = typeof process !== "undefined" && (process as any).env && (process as any).env.NEXT_PUBLIC_R2_PUBLIC_URL
+    ? (process as any).env.NEXT_PUBLIC_R2_PUBLIC_URL
+    : (typeof window !== "undefined" && (window as any).__NEXT_DATA__ && (window as any).__NEXT_DATA__.env && (window as any).__NEXT_DATA__.env.NEXT_PUBLIC_R2_PUBLIC_URL)
+    ? (window as any).__NEXT_DATA__.env.NEXT_PUBLIC_R2_PUBLIC_URL
+    : "https://pub-xxxxxxxxxx.r2.dev";
+
+  const key = s.replace(/^\/+/, "");
+  return `${base.replace(/\/+$/, "")}/${encodeURIComponent(key)}`;
+}
+
 /* ---------------- Component ---------------- */
 export default function CoursesManager({ apiBase = "/api/admin" }: { apiBase?: string }) {
   const [course, setCourse] = useState<DraftCourse>(() => ({
@@ -282,7 +311,8 @@ export default function CoursesManager({ apiBase = "/api/admin" }: { apiBase?: s
   const [courses, setCourses] = useState<CourseMeta[]>([]);
   const [loadingCourses, setLoadingCourses] = useState(false);
 
-  const [thumbnailPreview, setThumbnailPreview] = useState<string>(DEFAULT_THUMBNAIL);
+  // initialize preview to resolved default thumbnail URL
+  const [thumbnailPreview, setThumbnailPreview] = useState<string>(resolveMediaUrl(DEFAULT_THUMBNAIL_KEY) ?? "");
   const [introVideoPreview, setIntroVideoPreview] = useState<string | null>(null);
 
   const [editorOpen, setEditorOpen] = useState(false);
@@ -343,60 +373,98 @@ export default function CoursesManager({ apiBase = "/api/admin" }: { apiBase?: s
     setCourse((c) => ({ ...c, lessons: c.lessons.filter((l) => l.id !== id) }));
   }, []);
 
+  // track object URLs to revoke on change/unmount
+  const thumbnailObjectUrlRef = React.useRef<string | null>(null);
+  const introVideoObjectUrlRef = React.useRef<string | null>(null);
+
   const setThumbnail = useCallback((f: File | null) => {
     setCourse((c) => ({ ...c, thumbnail: f }));
+    if (thumbnailObjectUrlRef.current) {
+      try {
+        URL.revokeObjectURL(thumbnailObjectUrlRef.current);
+      } catch {
+        // ignore
+      }
+      thumbnailObjectUrlRef.current = null;
+    }
+
     if (!f) {
-      setThumbnailPreview(DEFAULT_THUMBNAIL);
+      setThumbnailPreview(resolveMediaUrl(DEFAULT_THUMBNAIL_KEY) ?? "");
       return;
     }
     const url = URL.createObjectURL(f);
+    thumbnailObjectUrlRef.current = url;
     setThumbnailPreview(url);
+  }, []);
+
+  // cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (thumbnailObjectUrlRef.current) try { URL.revokeObjectURL(thumbnailObjectUrlRef.current); } catch {}
+      if (introVideoObjectUrlRef.current) try { URL.revokeObjectURL(introVideoObjectUrlRef.current); } catch {}
+    };
   }, []);
 
   const setIntroVideo = useCallback((f: File | null) => {
     setCourse((c) => ({ ...c, introVideo: f }));
+    if (introVideoObjectUrlRef.current) {
+      try {
+        URL.revokeObjectURL(introVideoObjectUrlRef.current);
+      } catch {
+        // ignore
+      }
+      introVideoObjectUrlRef.current = null;
+    }
+
     if (!f) {
       setIntroVideoPreview(null);
       return;
     }
     const url = URL.createObjectURL(f);
+    introVideoObjectUrlRef.current = url;
     setIntroVideoPreview(url);
   }, []);
 
-  /* ---------------- Upload Helper ---------------- */
-  const uploadFile = useCallback(
-    async (file: File | null | undefined, timeoutMs = 120000): Promise<string | null> => {
-      if (!file) return null;
-      const fd = new FormData();
-      fd.append("file", file);
+  /* ---------------- Upload Helper (PRESIGN + direct PUT to R2) ---------------- */
+ const uploadFile = useCallback(
+  async (file: File | null | undefined, timeoutMs = 10 * 60 * 1000, folder = "videos"): Promise<string | null> => {
+    if (!file) return null;
 
-      const controller = new AbortController();
-      const to = setTimeout(() => controller.abort(), timeoutMs);
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("folder", folder); // optional; server validates allowedFolders
 
-      try {
-        const res = await fetch(`${apiBase}/uploads`, {
-          method: "POST",
-          body: fd,
-          signal: controller.signal,
-        });
-        clearTimeout(to);
+    const controller = new AbortController();
+    const to = setTimeout(() => controller.abort(), timeoutMs);
 
-        if (!res.ok) {
-          const text = await res.text().catch(() => "");
-          throw new Error(text || `Upload failed (${res.status})`);
-        }
-        const ct = res.headers.get("content-type") || "";
-        const json = ct.includes("application/json") ? await res.json().catch(() => null) : null;
-        if (!json || !json.url) throw new Error("Upload endpoint returned no url");
-        return String(json.url);
-      } catch (err: any) {
-        clearTimeout(to);
-        if (err?.name === "AbortError") throw new Error("Upload timed out");
-        throw err;
+    try {
+      const res = await fetch(`/api/admin/uploads/proxy`, {
+        method: "POST",
+        body: fd,
+        signal: controller.signal,
+      });
+      clearTimeout(to);
+
+      if (!res.ok) {
+        const txt = await res.text().catch(() => "");
+        throw new Error(txt || `Upload failed (${res.status})`);
       }
-    },
-    [apiBase]
-  );
+
+      const json = await res.json().catch(() => null);
+      if (!json || !json.ok || !json.key) {
+        throw new Error(`Invalid upload response: ${JSON.stringify(json)}`);
+      }
+      return String(json.key);
+    } catch (err: any) {
+      clearTimeout(to);
+      if (err?.name === "AbortError") throw new Error("Upload timed out");
+      throw err;
+    }
+  },
+  []
+);
+
+
 
   /* ---------------- Save Course ---------------- */
   const saveCourse = useCallback(async () => {
@@ -417,14 +485,19 @@ export default function CoursesManager({ apiBase = "/api/admin" }: { apiBase?: s
     setMessage(null);
 
     try {
-      const imageUrl = course.thumbnail ? await uploadFile(course.thumbnail) : (isValidUrlString(thumbnailPreview) ? thumbnailPreview : null);
-      const introVideoUrl = course.introVideo ? await uploadFile(course.introVideo) : (isValidUrlString(introVideoPreview) ? introVideoPreview : null);
+      // For images/thumbnails, use folder "thumbnails" or "images" depending on your R2 setup
+      // If user didn't upload, use DEFAULT_THUMBNAIL_KEY (R2 key)
+      const imageUrlOrKey = course.thumbnail
+        ? await uploadFile(course.thumbnail, 10 * 60 * 1000, "thumbnails")
+        : DEFAULT_THUMBNAIL_KEY;
+
+      const introVideoUrlOrKey = course.introVideo ? await uploadFile(course.introVideo, 10 * 60 * 1000, "videos") : (isValidUrlString(introVideoPreview) ? introVideoPreview : null);
 
       const lessonsPayload: any[] = [];
 
       for (const l of course.lessons) {
         try {
-          const resourceUrl = l.resourceFile ? await uploadFile(l.resourceFile) : l.resourceUrl ?? null;
+          const resourceUrlOrKey = l.resourceFile ? await uploadFile(l.resourceFile, 10 * 60 * 1000, "videos") : l.resourceUrl ?? null;
           const lessonDurationSeconds = parseDurationToSeconds(l.duration);
 
           const parsedPreview: QuizQuestion[] | null = l.__parsedQuizzes ?? (l.quizPreview ? safeParseQuizzes(l.quizPreview) : null);
@@ -448,7 +521,7 @@ export default function CoursesManager({ apiBase = "/api/admin" }: { apiBase?: s
             duration: lessonDurationSeconds,
             summary: l.summary ?? null,
             content: contentToSend ?? null,
-            resourceUrl: resourceUrl ?? null,
+            resourceUrl: resourceUrlOrKey ?? null,
           });
         } catch (lessonErr: any) {
           console.error("lesson upload failed for", l.id, lessonErr);
@@ -470,8 +543,8 @@ export default function CoursesManager({ apiBase = "/api/admin" }: { apiBase?: s
         subtitle: course.subtitle ?? null,
         description: course.description ?? null,
         duration: courseDurationSeconds,
-        image: imageUrl ?? null,
-        introVideo: introVideoUrl ?? null,
+        image: imageUrlOrKey ?? null,
+        introVideo: introVideoUrlOrKey ?? null,
         lessons: lessonsPayload,
       };
 
@@ -514,7 +587,7 @@ export default function CoursesManager({ apiBase = "/api/admin" }: { apiBase?: s
       setEditorOpen(false);
       setEditingMetaId(null);
       setIntroVideoPreview(null);
-      setThumbnailPreview(DEFAULT_THUMBNAIL);
+
       setCourse({
         id: uid("draft"),
         title: "",
@@ -586,12 +659,21 @@ export default function CoursesManager({ apiBase = "/api/admin" }: { apiBase?: s
             ? meta.sections
             : [];
 
-        const mappedLessons: DraftLesson[] = lessonsArray.map((lesson: any) => normalizeLessonForEditor(lesson));
+        // normalize lessons and resolve resource URLs from keys or urls
+        const mappedLessons: DraftLesson[] = lessonsArray.map((lesson: any) => {
+          const normalized = normalizeLessonForEditor(lesson);
+          // resolve resourceUrl (if it's a key, convert to public url)
+          if (normalized.resourceUrl) normalized.resourceUrl = resolveMediaUrl(normalized.resourceUrl);
+          return normalized;
+        });
 
         // As a last fallback, if nothing found, try treating meta itself as lesson-like
         if (mappedLessons.length === 0) {
           const fallback = normalizeLessonForEditor(meta);
-          if (fallback && (fallback.title || fallback.__parsedQuizzes || fallback.resourceUrl || fallback.content)) mappedLessons.push(fallback);
+          if (fallback && (fallback.title || fallback.__parsedQuizzes || fallback.resourceUrl || fallback.content)) {
+            if (fallback.resourceUrl) fallback.resourceUrl = resolveMediaUrl(fallback.resourceUrl);
+            mappedLessons.push(fallback);
+          }
         }
 
         console.debug("[CoursesManager] normalized lessons:", mappedLessons);
@@ -608,6 +690,7 @@ export default function CoursesManager({ apiBase = "/api/admin" }: { apiBase?: s
           updatedAt: meta.updatedAt ?? meta.createdAt ?? undefined,
         });
 
+        // determine the thumbnail and intro values the server returned (may be keys or full urls)
         const thumbFromServer =
           isValidUrlString(meta.image) && meta.image
             ? meta.image
@@ -615,7 +698,8 @@ export default function CoursesManager({ apiBase = "/api/admin" }: { apiBase?: s
             ? meta.thumbnail
             : isValidUrlString(meta.intro) && meta.intro
             ? meta.intro
-            : DEFAULT_THUMBNAIL;
+            : DEFAULT_THUMBNAIL_KEY;
+
         const introFromServer =
           isValidUrlString(meta.introVideo) && meta.introVideo
             ? meta.introVideo
@@ -623,8 +707,9 @@ export default function CoursesManager({ apiBase = "/api/admin" }: { apiBase?: s
             ? meta.introVideoUrl
             : meta.intro ?? null;
 
-        setThumbnailPreview(thumbFromServer);
-        setIntroVideoPreview(introFromServer);
+        // resolve to public URLs for preview
+        setThumbnailPreview(resolveMediaUrl(thumbFromServer) ?? resolveMediaUrl(DEFAULT_THUMBNAIL_KEY) ?? "");
+        setIntroVideoPreview(resolveMediaUrl(introFromServer) ?? null);
 
         setEditingMetaId(meta.id ?? null);
         setEditorOpen(true);
@@ -677,8 +762,10 @@ export default function CoursesManager({ apiBase = "/api/admin" }: { apiBase?: s
                 lessons: [],
               });
               setEditingMetaId(null);
-              setThumbnailPreview(DEFAULT_THUMBNAIL);
+          
               setIntroVideoPreview(null);
+              // set preview to default resolved thumbnail
+              setThumbnailPreview(resolveMediaUrl(DEFAULT_THUMBNAIL_KEY) ?? "");
               setEditorOpen(true);
             }}
             className="inline-flex items-center gap-2 px-4 py-2 rounded-2xl bg-gradient-to-r from-indigo-600 to-violet-600 text-white shadow-md"
@@ -717,24 +804,27 @@ export default function CoursesManager({ apiBase = "/api/admin" }: { apiBase?: s
         {!loadingCourses && coursesToDisplay.length === 0 && <div className="text-sm text-slate-400">No recent courses found.</div>}
 
         {coursesToDisplay.map((c) => {
-          const thumb =
+          const rawThumb =
             isValidUrlString(c.image) ? c.image :
             isValidUrlString(c.thumbnail) ? c.thumbnail :
             isValidUrlString(c.intro) ? c.intro :
             isValidUrlString(c.introVideo) ? c.introVideo :
-            DEFAULT_THUMBNAIL;
+            DEFAULT_THUMBNAIL_KEY;
+
+          const thumb = resolveMediaUrl(rawThumb) ?? resolveMediaUrl(DEFAULT_THUMBNAIL_KEY) ?? DEFAULT_THUMBNAIL_KEY;
 
           return (
             <div key={c.id} className="bg-white rounded-2xl shadow-md overflow-hidden border hover:shadow-lg transition-shadow">
               <div className="h-40 w-full overflow-hidden bg-pink-50">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
-                  src={thumb ?? DEFAULT_THUMBNAIL}
+                  src={thumb ?? (resolveMediaUrl(DEFAULT_THUMBNAIL_KEY) ?? "")}
                   alt={c.title}
                   className="w-full h-full object-cover"
                   onError={(e) => {
                     const t = e.currentTarget;
-                    if (t.src !== DEFAULT_THUMBNAIL) t.src = DEFAULT_THUMBNAIL;
+                    const fallback = resolveMediaUrl(DEFAULT_THUMBNAIL_KEY) ?? "";
+                    if (t.src !== fallback) t.src = fallback;
                   }}
                 />
               </div>
@@ -773,7 +863,7 @@ export default function CoursesManager({ apiBase = "/api/admin" }: { apiBase?: s
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[9999] flex items-start sm:items-center justify-center p-6"
+            className="fixed inset-0 z-9999 flex items-start sm:items-center justify-center p-6"
           >
             <div className="absolute inset-0 bg-black/40" onClick={() => { setEditorOpen(false); setEditingMetaId(null); }} />
 
@@ -858,7 +948,7 @@ export default function CoursesManager({ apiBase = "/api/admin" }: { apiBase?: s
                     <div className="rounded-xl overflow-hidden border border-dashed border-gray-100 bg-white">
                       <div className="w-full h-36 bg-gray-50">
                         {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img src={thumbnailPreview ?? DEFAULT_THUMBNAIL} alt="Course Thumbnail Preview" className="w-full h-full object-cover" onError={(e) => { const t = e.currentTarget; if (t.src !== DEFAULT_THUMBNAIL) t.src = DEFAULT_THUMBNAIL; }} />
+                        <img src={thumbnailPreview ?? (resolveMediaUrl(DEFAULT_THUMBNAIL_KEY) ?? "")} alt="Course Thumbnail Preview" className="w-full h-full object-cover" onError={(e) => { const t = e.currentTarget; const fallback = resolveMediaUrl(DEFAULT_THUMBNAIL_KEY) ?? ""; if (t.src !== fallback) t.src = fallback; }} />
                       </div>
 
                       <div className="p-3">
@@ -1113,7 +1203,11 @@ function LessonEditor({
           </div>
         )}
 
-        
+        {/* Raw JSON editor */}
+        <div className="mt-3">
+          <label className="text-xs text-slate-500">Raw quiz JSON (optional)</label>
+          <textarea value={localQuizPreview ?? ""} onChange={(e) => onRawQuizJsonChange(e.target.value)} placeholder='{"quizzes":[{"question":"...","options":["a","b"],"answer":"a"}]}' className="mt-1 w-full min-h-[120px] rounded-lg border border-gray-200 p-2 text-sm" />
+        </div>
       </div>
     </motion.div>
   );
