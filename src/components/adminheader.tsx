@@ -50,11 +50,11 @@ function HRTrioBadge({
 
 export default function TopNav() {
   return (
-    <header className="w-full z-20 relative">
+    <header className="w-full -z-10 relative">
       <div className="max-w-10xl mx-auto px-9 lg:px-11">
         <div
           className="
-            bg-gradient-to-t from-indigo-950 to-indigo-900
+            bg-linear-to-t from-indigo-950 via-indigo-900 to-indigo-800
             text-white shadow-lg rounded-b-3xl
             flex items-center justify-center
             px-6 py-6

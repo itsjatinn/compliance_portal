@@ -107,14 +107,14 @@ export default function LoginPage(): JSX.Element {
   }
 
   return (
-    <div className="min-h-screen mr-5 ml-5 rounded-3xl bg-gradient-to-b from-[var(--color-primary-900)] via-[var(--color-primary-800)] to-[var(--color-primary-700)] text-white">
+    <div className="min-h-screen -mt-8 mr-5 ml-5 rounded-3xl  bg-linear-to-b from-indigo-950 to-indigo-900 text-white">
       <main className="w-full items-center justify-center px-8 lg:px-15">
         <div className="max-w-7xl grid grid-cols-1 md:grid-cols-2 gap-12 items-center py-20">
           {/* Left intro */}
           <aside className="px-8 md:px-0">
             <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight">
               Continue your{" "}
-              <span className="text-[var(--color-accent-400)]">POSH Training</span>
+              <span className="text-(--color-accent-400)">POSH Training</span>
             </h1>
             <p className="mt-4 text-base text-slate-200 max-w-lg">
               Sign in to access your courses, track your progress, and complete
@@ -258,7 +258,7 @@ export default function LoginPage(): JSX.Element {
               </div>
             </div>
 
-            <div className="mt-4 text-center text-xs text-slate-300">© {new Date().getFullYear()} LawCrafters — built for compliance teams.</div>
+            <div className="mt-4 text-center text-xs text-slate-300">© {new Date().getFullYear()} ZaroHR — cutting through clutter.</div>
           </section>
         </div>
       </main>

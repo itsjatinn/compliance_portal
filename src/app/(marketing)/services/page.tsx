@@ -173,7 +173,7 @@ export default function ServicesPage(): JSX.Element {
 
       {/* HERO SECTION */}
       <section
-        className="relative overflow-hidden bg-gradient-to-b rounded-3xl from-indigo-950 via-indigo-900 to-indigo-800 text-white rounded-b-[2.5rem] shadow-2xl"
+        className="relative overflow-hidden rounded-3xl bg-linear-to-b  from-indigo-950  to-indigo-900 text-white rounded-b-[2.5rem] shadow-2xl"
         aria-label="LMS Services Hero"
       >
         <div className="max-w-7xl mx-auto px-6 py-24 lg:py-32">
@@ -299,12 +299,12 @@ export default function ServicesPage(): JSX.Element {
               >
                 <div className="flex-shrink-0 flex flex-col items-center lg:items-start">
                   <div className="p-4 rounded-lg bg-indigo-100">
-                    <Icon className="h-8 w-8 text-indigo-700" aria-hidden />
+                    <Icon className="h-8 w-8 text-indigo-800" aria-hidden />
                   </div>
                   <Pill>Core Module</Pill>
                 </div>
                 <div className="flex-1">
-                  <h3 className="text-xl font-semibold text-indigo-700">{s.title}</h3>
+                  <h3 className="text-xl font-semibold text-indigo-800">{s.title}</h3>
                   <p className="text-sm text-slate-500">{s.subtitle}</p>
                   <p className="mt-4 text-slate-600 text-sm">{s.description}</p>
                   <ul className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm text-slate-700">
@@ -334,10 +334,10 @@ export default function ServicesPage(): JSX.Element {
                 >
                   <div className="flex items-center gap-4">
                     <div className="p-3 rounded-lg bg-indigo-50">
-                      <Icon className="h-6 w-6 text-indigo-600" aria-hidden />
+                      <Icon className="h-6 w-6 text-indigo-800" aria-hidden />
                     </div>
                     <div>
-                      <h3 className="text-lg font-semibold text-slate-800">{s.title}</h3>
+                      <h3 className="text-lg font-semibold text-indigo-800">{s.title}</h3>
                       <p className="text-sm text-slate-500">{s.subtitle}</p>
                     </div>
                   </div>
@@ -357,7 +357,7 @@ export default function ServicesPage(): JSX.Element {
       </motion.section>
 
       {/* CONTACT CTA */}
-      <section className="bg-gradient-to-b from-indigo-950 via-indigo-900 to-indigo-800 text-white rounded-3xl sm:py-15 py-15 mb-19">
+      <section className="bg-linear-to-b  from-indigo-950  to-indigo-900 text-white rounded-3xl sm:py-15 py-15 mb-19">
         <div className="max-w-7xl mx-auto px-6 lg:px-20 flex flex-col sm:flex-row items-center justify-between gap-8">
           {/* Left text content */}
           <div>

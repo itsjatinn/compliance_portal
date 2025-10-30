@@ -603,6 +603,53 @@ export default function OrganizationManager({ onClose }: { onClose?: () => void 
     }
   }
 
+  /* ---------------- SAMPLE CSV helpers ---------------- */
+
+  // Generate CSV content for sample file (headers + a couple of examples)
+  function getSampleCsvContent(): string {
+    // Provide headers and a couple example rows. Keep role optional.
+    const rows = [
+      ["name", "email", "role"],
+      ["John Doe", "john.doe@example.com", "learner"],
+      ["Jane Smith", "jane.smith@example.com", "org_admin"],
+    ];
+    // Simple CSV generation (escape if needed)
+    return rows
+      .map((r) =>
+        r
+          .map((cell) => {
+            if (cell == null) return "";
+            const s = String(cell);
+            // if contains comma/quote/newline wrap in quotes and escape quotes
+            if (/[,"\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+            return s;
+          })
+          .join(",")
+      )
+      .join("\n");
+  }
+
+  function downloadSampleCsv(filename = "sample-employees.csv") {
+    try {
+      const csv = getSampleCsvContent();
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      // free memory
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+    } catch (err) {
+      console.error("downloadSampleCsv error:", err);
+      alert("Could not generate sample CSV");
+    }
+  }
+
+  
+
   /* ---------------- UI (single-column full-width right panel + dropdown) ---------------- */
 
   return (
@@ -781,7 +828,7 @@ export default function OrganizationManager({ onClose }: { onClose?: () => void 
                             <div className="font-medium">CSV Upload</div>
                             <div className="text-xs text-slate-400">Header: <code>name,email,role</code> (role optional)</div>
                           </div>
-                          <div>
+                          <div className="flex items-center gap-2">
                             <select value={selectedOrg ?? ""} onChange={(e) => setSelectedOrg(e.target.value || null)} className="rounded-md border px-3 py-2">
                               <option value="">Select organization</option>
                               {orgs.map((o) => (
@@ -790,6 +837,16 @@ export default function OrganizationManager({ onClose }: { onClose?: () => void 
                                 </option>
                               ))}
                             </select>
+
+                            {/* NEW: sample CSV download / copy */}
+                            <button
+                              onClick={() => downloadSampleCsv()}
+                              className="inline-flex items-center gap-2 px-3 py-2 rounded-md border"
+                              title="Download a sample CSV (name,email,role)"
+                            >
+                              Download sample Csv
+                            </button>
+                            
                           </div>
                         </div>
 
@@ -808,9 +865,7 @@ export default function OrganizationManager({ onClose }: { onClose?: () => void 
                           >
                             Clear
                           </button>
-                          <div className="ml-auto text-sm text-slate-400">
-                            Sample CSV: <strong>name,email,role</strong>
-                          </div>
+                          
                         </div>
 
                         {csvErrors.length > 0 && <div className="mt-3 text-sm text-red-600">{csvErrors.join(", ")}</div>}

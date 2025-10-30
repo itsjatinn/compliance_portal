@@ -1,7 +1,7 @@
 // app/(auth)/layout.tsx
 import type { ReactNode } from "react";
 import Link from "next/link";
-import TopNav from "../../components/coursenav"; // adjust path if needed
+import TopNav from "../../components/adminheader"; // adjust path if needed
 
 export default function AuthLayout({ children }: { children: ReactNode }) {
   return (

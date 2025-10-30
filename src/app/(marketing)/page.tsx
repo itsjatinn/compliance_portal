@@ -147,6 +147,7 @@ const testimonialItem: Variants = {
   exit: { opacity: 0, y: -8, transition: { duration: 0.35 } }
 };
 
+
 /* ---------------- Hero (POSH-focused) ---------------- */
 function Hero() {
   // video controls / non-skippable logic
@@ -264,7 +265,7 @@ function Hero() {
         initial="hidden"
         animate="show"
         variants={pageContainer}
-        className="relative overflow-hidden bg-gradient-to-b rounded-3xl  from-indigo-950 via-indigo-900 to-indigo-800 text-white"
+        className="relative overflow-hidden bg-linear-to-b rounded-3xl  from-indigo-950  to-indigo-900 text-white"
       >
         <div className="max-w-7xl  mx-auto   lg:px-20 py-20 lg:py-28">
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-10 items-center">
@@ -279,7 +280,7 @@ function Hero() {
 
               <motion.div variants={heroVariants} className="mt-8 flex flex-col sm:flex-row gap-4">
                 <a
-                  href="/demo"
+                  href="/contact"
                   className="inline-flex items-center gap-2 rounded-md bg-amber-400 text-indigo-900 px-5 py-3 font-semibold shadow-lg hover:opacity-95 focus:outline-none"
                   aria-label="Request POSH demo"
                 >
@@ -305,10 +306,10 @@ function Hero() {
                     <ShieldCheck className="w-6 h-6 text-amber-700" />
                   </div>
                   <div>
-                    <div className="text-sm font-semibold">POSH Module — Mandatory</div>
-                    <div className="text-xs text-amber-100">Duration: 45 minutes • Certificate on pass</div>
+                    <div className="text-sm font-semibold">POSH Intro - Mandatory </div>
+                   
                   </div>
-                </div>
+                </div>          
 
                 <div className="mt-5 relative group">
                   <video
@@ -316,9 +317,11 @@ function Hero() {
                     // muted initially to allow autoplay on many browsers
                     muted
                     playsInline
+                    crossOrigin="anonymous"
                     // we hide native controls so users can't scrub forward/back
                     controls={false}
-                    preload="metadata"
+                    // ask the browser to preload the resource
+                    preload="auto"
                     className="w-full h-55 object-cover bg-black rounded-lg"
                     // handlers to enforce non-skippable behavior
                     onTimeUpdate={handleTimeUpdate}
@@ -327,9 +330,11 @@ function Hero() {
                     onPause={() => setIsPlaying(false)}
                     onMouseMove={showAndHideControls}
                     loop
+                    // set the source directly here (works cross-browser and with CORS)
+                    src={
+                      "https://pub-f1ac07e3ff5146c28688943a8070f819.r2.dev/videos/POSH%20Act%20Explained%20(2).mp4"
+                    }
                   >
-                    {/* Put your actual video file here */}
-                    <source src="/test.mp4" type="video/mp4" />
                     {/* fallback */}
                     Your browser does not support the video tag.
                   </video>
@@ -427,6 +432,7 @@ function Hero() {
     </>
   );
 }
+
 
 /* ---------------- POSH Feature Grid ---------------- */
 const FEATURES = [
@@ -690,7 +696,7 @@ function Testimonials() {
 /* ---------------- CTA & Footer (animated CTA) ---------------- */
 function DemoCTA() {
   return (
-    <section className="bg-gradient-to-b from-[var(--color-primary-900)] to-[var(--color-primary-800)] text-white rounded-3xl sm:py-20 py-15 mb-19">
+    <section className=" text-white bg-linear-to-b  from-indigo-950  to-indigo-900 rounded-3xl sm:py-20 py-15 mb-19">
       <div className="max-w-8xl mx-auto px-6 lg:px-21 flex flex-col sm:flex-row items-center justify-between gap-6">
         <div>
           <h3 className="text-2xl sm:text-3xl font-semibold">

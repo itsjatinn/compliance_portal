@@ -2,7 +2,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import TopNav from "../coursenav";
+import TopNav from "../adminheader";
 import { Play, Pause, Maximize, Minimize, CheckCircle } from "lucide-react";
 import QuizModal from "./QuizModal";
 import LessonReportModal from "./LessonReportModal";

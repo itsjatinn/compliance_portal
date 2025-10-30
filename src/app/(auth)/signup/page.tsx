@@ -108,7 +108,7 @@ export default function SignupPage() {
   }
 
   return (
-    <div className="min-h-screen  mb-18 mr-5 ml-5 rounded-3xl bg-gradient-to-b from-[var(--color-primary-900)] via-[var(--color-primary-800)] to-[var(--color-primary-700)] text-white">
+    <div className="min-h-screen -mt-8 mb-18 mr-5 ml-5 rounded-3xl bg-gradient-to-b from-indigo-950 to-indigo-900 text-white">
       <div className="max-w-9xl mx-auto grid grid-cols-1 md:grid-cols-2 gap-12 items-center py-16 px-12 lg:px-20">
         {/* Left side content */}
         <aside>
@@ -248,7 +248,7 @@ export default function SignupPage() {
           </div>
 
           <div className="mt-4 text-center text-xs text-slate-300">
-            © {new Date().getFullYear()} LawCrafters — built for compliance teams.
+            © {new Date().getFullYear()} ZaroHR — cutting through clutter.
           </div>
         </section>
       </div>
